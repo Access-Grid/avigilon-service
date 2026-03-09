@@ -1,0 +1,21 @@
+# AccessGrid Agent for Avigilon Unity (Plasec) Dependencies
+
+# AccessGrid SDK
+accessgrid==0.2.0
+
+# HTTP API client
+requests>=2.31.0          # HTTP requests for Plasec API
+urllib3>=2.0.0            # HTTP library (used by requests)
+
+# Config encryption
+cryptography>=42.0.0      # Fernet (AES-128-CBC + HMAC-SHA256) for at-rest config
+
+# GUI
+Pillow>=8.0.0             # Photo processing + GUI image support
+
+# Logging and monitoring
+structlog>=21.0.0         # Structured logging
+sentry-sdk>=2.43.0        # Error tracking
+
+# Build (for packaging)
+pyinstaller>=6.0.0        # Windows executable build

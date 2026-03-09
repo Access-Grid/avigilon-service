@@ -1,0 +1,533 @@
+"""
+HTTP API client for Plasec / Avigilon Unity access control system.
+
+Auth flow:
+  1. POST /sessions with login= and password= fields
+  2. Server sets XSRF-TOKEN + _session_id cookies in the response
+  3. All subsequent write requests include X-CSRF-Token header read from XSRF-TOKEN cookie
+
+Confirmed API surface (from live capture):
+  GET  /identities.json?page=N&perpage=N      - paginated identity list
+  GET  /identities/{cn}.json                  - single identity detail (with email/phone)
+  POST /identities                            - create identity
+  GET  /identities/{cn}/tokens.json           - list tokens for identity
+  POST /identities/{cn}/tokens               - create token
+  POST /identities/{cn}/tokens/{tcn}         - update token (_method=put)
+  POST /identities/{cn}/update_roles         - assign roles (_method=put)
+"""
+
+import logging
+import re
+from typing import Dict, List, Optional
+
+import requests
+import urllib3
+
+from ..constants import (
+    HTTP_TIMEOUT,
+    HTTP_USER_AGENT,
+    PLASEC_TOKEN_STATUS_ACTIVE,
+    PLASEC_TOKEN_TYPE_STANDARD,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class PlaSecAuthError(Exception):
+    """Raised when authentication with Plasec fails."""
+
+
+class PlaSecAPIError(Exception):
+    """Raised when a Plasec API call fails."""
+
+
+class PlaSecClient:
+    """
+    Session-based HTTP client for Plasec / Avigilon Unity.
+
+    Maintains a requests.Session to persist cookies.  After login, the
+    XSRF-TOKEN cookie holds the current CSRF token; read it directly
+    rather than scraping HTML.
+    """
+
+    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False):
+        self.base_url = f"https://{host}"
+        self.username = username
+        self.password = password
+        self.verify_ssl = verify_ssl
+
+        self.session = requests.Session()
+        self.session.headers.update({'User-Agent': HTTP_USER_AGENT})
+        self._logged_in = False
+
+        if not verify_ssl:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    # ------------------------------------------------------------------
+    # Authentication
+    # ------------------------------------------------------------------
+
+    @property
+    def csrf_token(self) -> str:
+        """Current CSRF token from the XSRF-TOKEN session cookie."""
+        return self.session.cookies.get('XSRF-TOKEN', '')
+
+    def login(self) -> bool:
+        """
+        Authenticate via POST /sessions.
+        On success, XSRF-TOKEN and _session_id cookies are stored in the session.
+        """
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/sessions",
+                data={
+                    'login': self.username,
+                    'password': self.password,
+                },
+                allow_redirects=True,
+                verify=self.verify_ssl,
+                timeout=HTTP_TIMEOUT,
+            )
+            # Success: got a session cookie and either 200 or redirected off /sessions
+            if self.session.cookies.get('_session_id'):
+                self._logged_in = True
+                logger.info("Logged in to Plasec")
+                return True
+            logger.error(f"Plasec login: no session cookie (status {resp.status_code})")
+        except requests.RequestException as e:
+            logger.error(f"Plasec login request failed: {e}")
+        return False
+
+    def _ensure_authenticated(self):
+        if not self._logged_in:
+            if not self.login():
+                raise PlaSecAuthError("Cannot authenticate with Plasec server")
+
+    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+        """
+        Authenticated request wrapper.  Injects CSRF header for writes and
+        re-authenticates automatically if the session has expired.
+
+        Session expiry is detected two ways:
+          - 302 whose Location header points to /sessions (write ops with allow_redirects=False)
+          - 200 whose final URL is the /sessions login page (GET ops that followed a redirect)
+        """
+        self._ensure_authenticated()
+
+        headers = kwargs.pop('headers', {})
+        if method.upper() in ('POST', 'PUT', 'PATCH', 'DELETE'):
+            headers.setdefault('X-CSRF-Token', self.csrf_token)
+
+        resp = self.session.request(
+            method,
+            f"{self.base_url}{path}",
+            headers=headers,
+            verify=self.verify_ssl,
+            timeout=HTTP_TIMEOUT,
+            **kwargs,
+        )
+
+        if self._is_session_expired(resp, path):
+            logger.warning("Plasec session expired — re-authenticating")
+            self._logged_in = False
+            if self.login():
+                headers['X-CSRF-Token'] = self.csrf_token
+                resp = self.session.request(
+                    method,
+                    f"{self.base_url}{path}",
+                    headers=headers,
+                    verify=self.verify_ssl,
+                    timeout=HTTP_TIMEOUT,
+                    **kwargs,
+                )
+
+        return resp
+
+    def _is_session_expired(self, resp: requests.Response, requested_path: str) -> bool:
+        """Return True if the response indicates the session has expired."""
+        if resp.status_code == 302:
+            return '/sessions' in resp.headers.get('Location', '')
+        if resp.status_code == 200 and requested_path != '/sessions':
+            return '/sessions' in resp.url
+        return False
+
+    # ------------------------------------------------------------------
+    # Identity operations
+    # ------------------------------------------------------------------
+
+    def get_all_identities(self) -> List[Dict]:
+        """
+        Fetch all identities via paginated GET /identities.json.
+
+        The list response only has {cn, plasecName, plasecIdstatus, plasecLasttime,
+        primaryPhoto} — no email or phone.  Call get_identity() for full detail.
+        """
+        page = 1
+        per_page = 100
+        result: Dict[str, Dict] = {}
+
+        while True:
+            params: Dict = {
+                'page': page,
+                'perpage': per_page,
+                'sort_by': 'plasecName',
+                'order': 'ascend',
+            }
+
+            resp = self._request(
+                'GET', '/identities.json',
+                params=params,
+                headers={'Accept': 'application/json'},
+            )
+            if resp.status_code != 200:
+                logger.error(f"get_all_identities page {page}: HTTP {resp.status_code}")
+                break
+
+            try:
+                body = resp.json()
+            except Exception as e:
+                logger.error(f"Identity list JSON parse failed: {e}")
+                break
+
+            items = body.get('data', [])
+            for raw in items:
+                ident = self._normalize_identity(raw)
+                if ident.get('id'):
+                    result[ident['id']] = ident
+
+            meta = body.get('meta', {})
+            total = meta.get('recordsFiltered', 0)
+            if page * per_page >= total or not items:
+                break
+            page += 1
+
+        logger.debug(f"Found {len(result)} identities in Plasec")
+        return list(result.values())
+
+    def get_identity(self, identity_id: str) -> Optional[Dict]:
+        """
+        Fetch full detail for a single identity via GET /identities/{cn}.json.
+        Returns full fields including plasecFname, plasecLname,
+        plasecidentityEmailaddress, plasecidentityPhone.
+        """
+        resp = self._request(
+            'GET', f'/identities/{identity_id}.json',
+            headers={'Accept': 'application/json'},
+        )
+        if resp.status_code != 200:
+            logger.warning(f"get_identity {identity_id}: HTTP {resp.status_code}")
+            return None
+        try:
+            body = resp.json()
+            raw = body.get('data', body) if isinstance(body, dict) else body
+            if isinstance(raw, dict):
+                return self._normalize_identity(raw)
+        except Exception as e:
+            logger.error(f"get_identity {identity_id} parse failed: {e}")
+        return None
+
+    def get_identity_tokens(self, identity_id: str) -> List[Dict]:
+        """
+        List all tokens for an identity via GET /identities/{cn}/tokens.json.
+        Token ID is the 'cn' field; card number is plasecInternalnumber.
+        """
+        resp = self._request(
+            'GET', f'/identities/{identity_id}/tokens.json',
+            headers={'Accept': 'application/json'},
+        )
+        if resp.status_code != 200:
+            logger.debug(f"get_identity_tokens {identity_id}: HTTP {resp.status_code}")
+            return []
+        try:
+            body = resp.json()
+            items = body.get('data', body) if isinstance(body, dict) else body
+            if isinstance(items, list):
+                return [self._normalize_token(t, identity_id) for t in items]
+        except Exception as e:
+            logger.error(f"get_identity_tokens {identity_id} parse failed: {e}")
+        return []
+
+    def create_identity(self, data: Dict) -> Optional[str]:
+        """
+        Create a new identity.  Returns the new identity cn on success.
+        """
+        form = {
+            'utf8': '✓',
+            'authenticity_token': self.csrf_token,
+            'identity[plasecLname]': data.get('last_name', ''),
+            'identity[plasecFname]': data.get('first_name', ''),
+            'identity[plasecidentityEmailaddress]': data.get('email', ''),
+            'identity[plasecidentityPhone]': data.get('phone', ''),
+            'identity[plasecidentityWorkphone]': data.get('work_phone', ''),
+            'identity[plasecIdstatus]': '1',
+            'identity[plasecidentityPagetimeout]': '600000',
+            'identity[plasecidentityForcedPasswordChange]': 'TRUE',
+            'button': '',
+        }
+        resp = self._request('POST', '/identities', data=form, allow_redirects=False)
+        location = resp.headers.get('Location', '')
+        if resp.status_code == 302 and location:
+            m = re.search(r'/identities/([a-f0-9]+)', location)
+            if m:
+                new_id = m.group(1)
+                logger.info(f"Created Plasec identity: {new_id}")
+                return new_id
+        logger.error(f"create_identity failed: HTTP {resp.status_code}")
+        return None
+
+    def delete_identity(self, identity_id: str) -> bool:
+        """Delete an identity from Plasec."""
+        form = {
+            '_method': 'delete',
+            'authenticity_token': self.csrf_token,
+        }
+        resp = self._request(
+            'POST', f'/identities/{identity_id}',
+            data=form,
+            allow_redirects=False,
+        )
+        success = resp.status_code == 302
+        if success:
+            logger.info(f"Deleted Plasec identity {identity_id}")
+        else:
+            logger.error(f"delete_identity {identity_id} failed: HTTP {resp.status_code}")
+        return success
+
+    # ------------------------------------------------------------------
+    # Token operations
+    # ------------------------------------------------------------------
+
+    def create_token(self, identity_id: str, token_data: Dict) -> Optional[str]:
+        """
+        Create a token for an identity.
+        Returns the new token cn (extracted from the 302 redirect URL).
+        """
+        form = {
+            'utf8': '✓',
+            'authenticity_token': self.csrf_token,
+            'token[plasecInternalnumber]': token_data.get('internal_number', ''),
+            'token[plasecEmbossednumber]': token_data.get('embossed_number', ''),
+            'token[plasecPIN]': token_data.get('pin', ''),
+            'token[plasecTokenType]': token_data.get('token_type', PLASEC_TOKEN_TYPE_STANDARD),
+            'token[plasecTokenlevel]': token_data.get('level', '0'),
+            'token[plasecTokenstatus]': token_data.get('status', PLASEC_TOKEN_STATUS_ACTIVE),
+            'token[plasecDownload]': 'TRUE',
+            'token[plasecTokenMobileAppType]': '0',
+            'token[plasecTokenOrigoMobileIdType]': '0',
+            'token[plasecTokenEnableReValidation]': 'FALSE',
+            'token[plasecTokenUnitofUpdatePeriod]': '0',
+            'token[plasecTokenVIP]': 'FALSE',
+            'token[plasecTrace]': 'FALSE',
+            'token[plasectokenExtaccess]': 'FALSE',
+            'token[plasecTokennoexpire]': 'FALSE',
+            'token[plasectokenPinexempt]': 'FALSE',
+            'token[plasectokenUseloseexempt]': 'FALSE',
+            'token[plasecTokenOffice]': 'FALSE',
+            'token[plasecTokenSetLockDown]': 'FALSE',
+            'token[plasecTokenAuditOpenings]': 'FALSE',
+            'token[plasecTokenOverridePrivacy]': 'FALSE',
+            'token[plasecTokenOverrideLockDown]': 'FALSE',
+            'plasecIssuedate': token_data.get('issue_date', ''),
+            'plasecActivatedate': token_data.get('activate_date', ''),
+            'plasecDeactivatedate': token_data.get('deactivate_date', ''),
+            'enrollVirdiAfter': 'false',
+            'button': '',
+            'origoDevice': '',
+            'lastdoor': '',
+        }
+        resp = self._request(
+            'POST', f'/identities/{identity_id}/tokens',
+            data=form,
+            allow_redirects=False,
+        )
+        location = resp.headers.get('Location', '')
+        if resp.status_code == 302 and location:
+            m = re.search(rf'/identities/{identity_id}/tokens/([a-f0-9]+)', location)
+            if m:
+                token_id = m.group(1)
+                logger.info(f"Created token {token_id} for identity {identity_id}")
+                return token_id
+        logger.error(f"create_token for {identity_id} failed: HTTP {resp.status_code}")
+        return None
+
+    def update_token_status(
+        self,
+        identity_id: str,
+        token_id: str,
+        plasec_status: str,
+        current_token_data: Optional[Dict] = None,
+    ) -> bool:
+        """
+        Update a token's status.
+
+        The server requires ALL boolean and date fields to be present —
+        omitting them resets them to blank.  Preserve them from
+        current_token_data when available, defaulting to safe values otherwise.
+        """
+        td = current_token_data or {}
+        form = {
+            'utf8': '✓',
+            '_method': 'put',
+            'authenticity_token': self.csrf_token,
+            'token[plasecTokenstatus]': plasec_status,
+            'token[plasecInternalnumber]': td.get('internal_number', ''),
+            'token[plasecEmbossednumber]': td.get('embossed_number', ''),
+            'token[plasecPIN]': td.get('pin', ''),
+            'token[plasecTokenType]': td.get('token_type', '0'),
+            'token[plasecTokenlevel]': td.get('level', '0'),
+            'token[plasecTokenMobileAppType]': '0',
+            'token[plasecTokenOrigoMobileIdType]': '0',
+            'token[plasecDownload]': 'TRUE',
+            'token[plasecTokenEnableReValidation]': 'FALSE',
+            'token[plasecTokenUnitofUpdatePeriod]': '0',
+            'token[plasecTokenVIP]': 'FALSE',
+            'token[plasecTrace]': 'FALSE',
+            'token[plasectokenExtaccess]': 'FALSE',
+            'token[plasecTokennoexpire]': 'FALSE',
+            'token[plasectokenPinexempt]': 'FALSE',
+            'token[plasectokenUseloseexempt]': 'FALSE',
+            'token[plasecTokenOffice]': 'FALSE',
+            'token[plasecTokenSetLockDown]': 'FALSE',
+            'token[plasecTokenAuditOpenings]': 'FALSE',
+            'token[plasecTokenOverridePrivacy]': 'FALSE',
+            'token[plasecTokenOverrideLockDown]': 'FALSE',
+            'plasecIssuedate': td.get('issue_date', ''),
+            'plasecActivatedate': td.get('activate_date', ''),
+            'plasecDeactivatedate': td.get('deactivate_date', ''),
+            'enrollVirdiAfter': 'false',
+            'button': '',
+            'lastdoor': '',
+        }
+        resp = self._request(
+            'POST',
+            f'/identities/{identity_id}/tokens/{token_id}',
+            data=form,
+            allow_redirects=False,
+        )
+        success = resp.status_code == 302
+        if success:
+            logger.info(
+                f"Updated token {token_id} (identity {identity_id}) to status {plasec_status}"
+            )
+        else:
+            logger.error(
+                f"update_token_status failed for {token_id}: HTTP {resp.status_code}"
+            )
+        return success
+
+    def assign_roles(self, identity_id: str, role_dns: List[str]) -> bool:
+        """Assign roles to an identity."""
+        form: Dict = {
+            'utf8': '✓',
+            '_method': 'put',
+            'authenticity_token': self.csrf_token,
+            'button': '',
+            'sel_members[]': role_dns,
+        }
+        resp = self._request(
+            'POST',
+            f'/identities/{identity_id}/update_roles',
+            data=form,
+            allow_redirects=False,
+        )
+        success = resp.status_code == 302
+        if success:
+            logger.info(f"Assigned {len(role_dns)} role(s) to identity {identity_id}")
+        else:
+            logger.error(f"assign_roles for {identity_id} failed: HTTP {resp.status_code}")
+        return success
+
+    def test_connection(self) -> bool:
+        """Test connectivity: log in and fetch one page of identities."""
+        try:
+            if not self._logged_in and not self.login():
+                return False
+            resp = self._request(
+                'GET', '/identities.json',
+                params={'page': 1, 'perpage': 1},
+                headers={'Accept': 'application/json'},
+            )
+            return resp.status_code == 200
+        except Exception as e:
+            logger.error(f"Connection test failed: {e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # Response normalization
+    # ------------------------------------------------------------------
+
+    def _normalize_identity(self, raw: Dict) -> Dict:
+        """
+        Normalize a raw Plasec identity dict to our internal format.
+
+        List endpoint returns: {dn, cn, plasecName, plasecIdstatus, plasecLasttime, primaryPhoto}
+        Detail endpoint adds:  plasecFname, plasecLname, plasecidentityEmailaddress,
+                               plasecidentityPhone, plasecidentityWorkphone, etc.
+        """
+        identity_id = raw.get('cn', '') or raw.get('id', '')
+
+        # Prefer split fields (detail endpoint); fall back to parsing plasecName
+        first_name = raw.get('plasecFname', '') or ''
+        last_name  = raw.get('plasecLname', '') or ''
+        plasec_name = raw.get('plasecName', '') or ''
+
+        if not first_name and not last_name and plasec_name:
+            # Format is "Lastname, Firstname" or "Lastname, Firstname, MI"
+            parts = [p.strip() for p in plasec_name.split(',')]
+            last_name  = parts[0] if parts else ''
+            first_name = parts[1] if len(parts) > 1 else ''
+
+        full_name = f"{first_name} {last_name}".strip() or plasec_name
+
+        raw_status = str(raw.get('plasecIdstatus', '') or raw.get('status', ''))
+        status = self._normalize_identity_status(raw_status)
+
+        return {
+            'id':         identity_id,
+            'first_name': first_name,
+            'last_name':  last_name,
+            'full_name':  full_name,
+            'email':      raw.get('plasecidentityEmailaddress', '') or '',
+            'phone':      raw.get('plasecidentityPhone', '') or '',
+            'work_phone': raw.get('plasecidentityWorkphone', '') or '',
+            'status':     status,
+            'title':      raw.get('plasecidentityTitle', '') or '',
+            'department': raw.get('plasecidentityDepartment', '') or '',
+        }
+
+    def _normalize_identity_status(self, raw: str) -> str:
+        """Convert 'Active'/'Inactive'/etc. or '1'/'2'/etc. to canonical numeric string."""
+        mapping = {
+            'active': '1',
+            'inactive': '2',
+            'not yet active': '3',
+            'expired': '4',
+        }
+        lower = raw.lower()
+        if lower in mapping:
+            return mapping[lower]
+        # Already numeric
+        if raw in ('1', '2', '3', '4'):
+            return raw
+        return '1'
+
+    def _normalize_token(self, raw: Dict, identity_id: str = '') -> Dict:
+        """
+        Normalize a raw Plasec token dict.
+
+        Token ID is the 'cn' field.
+        Card number for AccessGrid provisioning is plasecInternalnumber.
+        """
+        return {
+            'id':              raw.get('cn', '') or raw.get('id', ''),
+            'identity_id':     identity_id,
+            'internal_number': str(raw.get('plasecInternalnumber', '') or ''),
+            'embossed_number': str(raw.get('plasecEmbossednumber', '') or ''),
+            'pin':             str(raw.get('plasecPIN', '') or ''),
+            'status':          str(raw.get('plasecTokenstatus', '1') or '1'),
+            'token_type':      str(raw.get('plasecTokenType', '0') or '0'),
+            'level':           str(raw.get('plasecTokenlevel', '0') or '0'),
+            'issue_date':      raw.get('plasecIssuedate', '') or '',
+            'activate_date':   raw.get('plasecActivatedate', '') or '',
+            'deactivate_date': raw.get('plasecDeactivatedate', '') or '',
+        }
