@@ -1,0 +1,115 @@
+name: Build Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos
+          - os: ubuntu-22.04
+            platform: linux
+          - os: windows-latest
+            platform: windows
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      # Tk shared libraries needed by PyInstaller on Linux
+      - name: Install Tk libs (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get install -y python3-tk
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Install UPX (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get install -y upx-ucl
+
+      - name: Install UPX (macOS)
+        if: matrix.platform == 'macos'
+        run: brew install upx
+
+      - name: Install UPX (Windows)
+        if: matrix.platform == 'windows'
+        run: choco install upx --no-progress -y
+
+      - name: Build with PyInstaller
+        run: pyinstaller AccessGridAgent.spec
+
+      # ---- Platform packaging ----
+
+      - name: Package (macOS)
+        if: matrix.platform == 'macos'
+        run: cd dist && zip -r AccessGridAvigilonAgent-macos.zip AccessGridAvigilonAgent.app
+
+      - name: Package (Linux)
+        if: matrix.platform == 'linux'
+        run: cd dist && tar -czf AccessGridAvigilonAgent-linux.tar.gz AccessGridAvigilonAgent
+
+      - name: Rename (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Rename-Item dist\AccessGridAvigilonAgent.exe AccessGridAvigilonAgent-windows.exe
+
+      # ---- Upload ----
+
+      - name: Upload artifact (macOS)
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: dist/AccessGridAvigilonAgent-macos.zip
+
+      - name: Upload artifact (Linux)
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: dist/AccessGridAvigilonAgent-linux.tar.gz
+
+      - name: Upload artifact (Windows)
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist/AccessGridAvigilonAgent-windows.exe
+
+  # ---- Create GitHub Release on tag push ----
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/AccessGridAvigilonAgent-macos.zip
+            dist/AccessGridAvigilonAgent-linux.tar.gz
+            dist/AccessGridAvigilonAgent-windows.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true

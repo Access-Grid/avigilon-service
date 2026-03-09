@@ -1,7 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for AccessGrid Avigilon Unity Agent (Windows .exe)
+# PyInstaller spec — builds on macOS, Linux, and Windows.
 
 import os
+import sys
 
 block_cipher = None
 
@@ -29,7 +30,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=['hooks/hook-cryptography.py'] if os.path.exists('hooks/hook-cryptography.py') else [],
     excludes=[
-        'pyodbc',   # Not needed — no SQL Server in this service
+        'pyodbc',
         'cx_Oracle',
         'oracledb',
         'matplotlib',
@@ -58,7 +59,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,         # No console window on Windows
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -66,3 +67,17 @@ exe = EXE(
     entitlements_file=None,
     icon='assets/logo.png',
 )
+
+# macOS: wrap the single-file binary in a proper .app bundle
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        exe,
+        name='AccessGridAvigilonAgent.app',
+        icon='assets/logo.png',
+        bundle_identifier='com.accessgrid.avigilon-agent',
+        info_plist={
+            'NSHighResolutionCapable': True,
+            'NSPrincipalClass': 'NSApplication',
+            'CFBundleShortVersionString': '1.0.0',
+        },
+    )
