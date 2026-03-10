@@ -299,20 +299,33 @@ class AccessGridAvigilonGUI:
             )
             return
 
+        self.start_btn.config(state=tk.DISABLED)
+        self.sync_status_var.set("Connecting…")
+        threading.Thread(target=self._start_sync_worker, daemon=True).start()
+
+    def _start_sync_worker(self):
+        """Run connection + engine startup off the main thread."""
         if not self.plasec_client:
             self._connect_plasec()
         if not self.ag_client:
             self._connect_accessgrid()
 
         if not self.plasec_client:
-            messagebox.showerror("Not Connected", "Cannot connect to Plasec server.")
+            self.root.after(0, lambda: [
+                messagebox.showerror("Not Connected", "Cannot connect to Plasec server."),
+                self.start_btn.config(state=tk.NORMAL),
+                self.sync_status_var.set("Stopped"),
+            ])
             return
         if not self.ag_client:
-            messagebox.showerror("Not Connected", "Cannot connect to AccessGrid API.")
+            self.root.after(0, lambda: [
+                messagebox.showerror("Not Connected", "Cannot connect to AccessGrid API."),
+                self.start_btn.config(state=tk.NORMAL),
+                self.sync_status_var.set("Stopped"),
+            ])
             return
 
         try:
-            # Open local SQLite DB
             self.local_db = LocalDB(DB_FILE)
             self.local_db.connect()
             self.local_db.ensure_table()
@@ -324,15 +337,21 @@ class AccessGridAvigilonGUI:
                 config=self.config,
             )
             self.sync_engine.start()
-
-            self.sync_status_var.set("Running")
-            self.start_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.NORMAL)
             logger.info("Sync engine started")
 
+            self.root.after(0, lambda: [
+                self.sync_status_var.set("Running"),
+                self.start_btn.config(state=tk.DISABLED),
+                self.stop_btn.config(state=tk.NORMAL),
+            ])
+
         except Exception as e:
-            messagebox.showerror("Start Failed", str(e))
             logger.error(f"Failed to start sync engine: {e}", exc_info=True)
+            self.root.after(0, lambda: [
+                messagebox.showerror("Start Failed", str(e)),
+                self.start_btn.config(state=tk.NORMAL),
+                self.sync_status_var.set("Stopped"),
+            ])
 
     def _stop_sync(self):
         if self.sync_engine:
