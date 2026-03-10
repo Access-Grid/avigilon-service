@@ -52,17 +52,34 @@ class _CycleSnapshot:
 class SyncStrategies:
     """Sync logic between Plasec (source) and AccessGrid (destination)."""
 
+    # Standard Wiegand format: {card_len_bits: (fc_bits, cn_bits)}
+    _WIEGAND_FORMATS: Dict[int, tuple] = {
+        26: (8,  16),
+        34: (16, 16),
+        35: (12, 20),
+        36: (8,  26),
+        37: (16, 19),
+    }
+
     def __init__(
         self,
         plasec_client: PlaSecClient,
         local_db: LocalDB,
         ag_client: AccessGrid,
         template_id: str,
+        template_protocol: str = '',
+        default_facility_code: str = '',
+        card_len: str = '',
+        max_bits: str = '',
     ):
-        self.plasec       = plasec_client
-        self.db           = local_db
-        self.ag           = ag_client
-        self.template_id  = template_id
+        self.plasec                 = plasec_client
+        self.db                     = local_db
+        self.ag                     = ag_client
+        self.template_id            = template_id
+        self.template_protocol      = template_protocol.lower() if template_protocol else ''
+        self.default_facility_code  = default_facility_code
+        self.card_len               = card_len
+        self.max_bits               = max_bits
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -169,15 +186,20 @@ class SyncStrategies:
         email       = item.get('identity', {}).get('email', '')
         phone       = item.get('identity', {}).get('phone', '')
 
+        is_seos = self.template_protocol == 'seos'
+
         if not full_name:
             logger.warning(f"Skipping identity {iid} token {tid}: no name")
             return False
         if not email and not phone:
             logger.warning(f"Skipping identity {iid} token {tid}: no email or phone")
             return False
+        if not is_seos and not card_number:
+            logger.warning(f"Skipping identity {iid} token {tid}: no card number")
+            return False
 
         try:
-            result = self.ag.access_cards.provision(
+            provision_kwargs: Dict = dict(
                 card_template_id=self.template_id,
                 employee_id=iid,
                 full_name=full_name,
@@ -186,6 +208,21 @@ class SyncStrategies:
                 start_date=item.get('activate_date') or None,
                 expiration_date=item.get('deactivate_date') or None,
             )
+
+            if not is_seos:
+                try:
+                    file_data = self._build_file_data(
+                        facility_code=int(self.default_facility_code or 0),
+                        card_number=int(card_number),
+                        card_len=int(self.card_len or 0),
+                        max_bits=int(self.max_bits or 0),
+                    )
+                    if file_data:
+                        provision_kwargs['file_data'] = file_data
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Could not build file_data for {iid}/{tid}: {e}")
+
+            result = self.ag.access_cards.provision(**provision_kwargs)
             ag_card_id = result.id
             if not ag_card_id:
                 raise ValueError(f"AccessGrid returned no card ID: {result}")
@@ -436,6 +473,52 @@ class SyncStrategies:
             'activate_date':  token.get('activate_date', ''),
             'deactivate_date': token.get('deactivate_date', ''),
         }
+
+    @staticmethod
+    def _build_file_data(facility_code: int, card_number: int, card_len: int, max_bits: int) -> str:
+        """
+        Encode a Wiegand credential as a hex string for DESFire/SmartTap provisioning.
+
+        Layout: even_parity(1) | facility_code(fc_bits) | card_number(cn_bits) | odd_parity(1)
+        Result is zero-padded to ceil(max_bits/8) bytes, max 32 bytes, big-endian.
+        """
+        if card_len < 4:
+            return ''
+
+        data_bits = card_len - 2  # strip 2 parity bits
+        fc_bits, cn_bits = SyncStrategies._WIEGAND_FORMATS.get(
+            card_len, (max(8, data_bits // 4), 0)
+        )
+        if not cn_bits:
+            cn_bits = data_bits - fc_bits
+
+        fc = facility_code & ((1 << fc_bits) - 1)
+        cn = card_number   & ((1 << cn_bits) - 1)
+
+        # Split data bits into upper / lower halves for parity computation
+        upper_half = data_bits // 2
+        lower_half = data_bits - upper_half
+
+        if fc_bits >= upper_half:
+            upper_data = fc >> (fc_bits - upper_half)
+        else:
+            cn_upper = upper_half - fc_bits
+            upper_data = (fc << cn_upper) | (cn >> (cn_bits - cn_upper))
+
+        lower_data = cn & ((1 << lower_half) - 1)
+
+        # Even parity: total 1s (parity bit + upper_data) must be even
+        even_p = bin(upper_data).count('1') % 2
+        # Odd parity: total 1s (parity bit + lower_data) must be odd
+        odd_p  = 1 - (bin(lower_data).count('1') % 2)
+
+        packed = (even_p << (card_len - 1)) | (fc << (cn_bits + 1)) | (cn << 1) | odd_p
+
+        num_bytes   = (card_len  + 7) // 8
+        total_bytes = min(32, max(num_bytes, (max_bits + 7) // 8))
+        card_bytes  = packed.to_bytes(num_bytes, byteorder='big')
+        padded      = card_bytes + b'\x00' * max(0, total_bytes - num_bytes)
+        return padded.hex()
 
     def _apply_ag_action(self, ag_card_id: str, action: str):
         if action == 'suspended':

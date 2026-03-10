@@ -106,6 +106,39 @@ class SyncEngine:
     # Internal sync loop
     # ------------------------------------------------------------------
 
+    def _resolve_template_config(self):
+        """
+        Fetch AG template protocol and Plasec card format details.
+        Called once before the sync loop starts; results stored on self.strategies.
+        """
+        template_id = self.config['accessgrid']['template_id']
+
+        # --- AG template protocol (seos / desfire / smart_tap / ...) ---
+        try:
+            tmpl = self.ag.console.read_template(template_id=template_id)
+            protocol = getattr(tmpl, 'protocol', '') or ''
+            self.strategies.template_protocol = protocol.lower()
+            logger.info(f"Template {template_id} protocol: {protocol!r}")
+        except Exception as e:
+            logger.warning(f"Could not fetch AG template protocol: {e}")
+
+        # --- Plasec card format (facility code + bit lengths for file_data) ---
+        try:
+            formats = self.plasec.get_card_formats()
+            if formats:
+                fmt = formats[0]
+                self.strategies.default_facility_code = fmt.get('facility_code', '')
+                self.strategies.card_len              = fmt.get('card_length', '')
+                self.strategies.max_bits              = fmt.get('max_bits', '')
+                logger.info(
+                    f"Card format {fmt.get('name')!r}: facility_code={fmt.get('facility_code')!r}, "
+                    f"card_len={fmt.get('card_length')!r}, max_bits={fmt.get('max_bits')!r}"
+                )
+            else:
+                logger.warning("No card formats found in Plasec")
+        except Exception as e:
+            logger.warning(f"Could not fetch Plasec card formats: {e}")
+
     def _sync_loop(self):
         self.running = True
         logger.info(
@@ -115,6 +148,8 @@ class SyncEngine:
         with sentry_sdk.configure_scope() as scope:
             scope.set_tag("template_id", self.config['accessgrid']['template_id'])
             scope.set_tag("plasec_host",  self.config['plasec']['host'])
+
+        self._resolve_template_config()
 
         while self.running:
             try:
