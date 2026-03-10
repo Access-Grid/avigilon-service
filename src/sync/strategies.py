@@ -58,16 +58,11 @@ class SyncStrategies:
         local_db: LocalDB,
         ag_client: AccessGrid,
         template_id: str,
-        template_protocol: str = '',
-        default_facility_code: str = '',
     ):
-        self.plasec                 = plasec_client
-        self.db                     = local_db
-        self.ag                     = ag_client
-        self.template_id            = template_id
-        # 'seos' = HID (no card data needed); others = DESFire/SmartTap (need site_code + card_number)
-        self.template_protocol      = template_protocol.lower() if template_protocol else ''
-        self.default_facility_code  = default_facility_code
+        self.plasec       = plasec_client
+        self.db           = local_db
+        self.ag           = ag_client
+        self.template_id  = template_id
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -174,12 +169,6 @@ class SyncStrategies:
         email       = item.get('identity', {}).get('email', '')
         phone       = item.get('identity', {}).get('phone', '')
 
-        is_seos = self.template_protocol == 'seos'
-
-        # Non-HID templates require card data; HID/Seos provisions by cardholder info only
-        if not is_seos and not card_number:
-            logger.warning(f"Skipping identity {iid} token {tid}: no card number")
-            return False
         if not full_name:
             logger.warning(f"Skipping identity {iid} token {tid}: no name")
             return False
@@ -188,22 +177,16 @@ class SyncStrategies:
             return False
 
         try:
-            create_kwargs: Dict = dict(
-                template_id=self.template_id,
+            result = self.ag.access_cards.provision(
+                card_template_id=self.template_id,
+                employee_id=iid,
                 full_name=full_name,
                 email=email,
-                phone=phone,
+                phone_number=phone,
                 start_date=item.get('activate_date') or None,
                 expiration_date=item.get('deactivate_date') or None,
             )
-            if not is_seos:
-                # DESFire / SmartTap: supply card number and facility code (site code)
-                create_kwargs['card_number'] = card_number
-                if self.default_facility_code:
-                    create_kwargs['site_code'] = self.default_facility_code
-
-            result = self.ag.access_cards.create(**create_kwargs)
-            ag_card_id = result.get('id') or result.get('card_id', '')
+            ag_card_id = result.id
             if not ag_card_id:
                 raise ValueError(f"AccessGrid returned no card ID: {result}")
 
@@ -217,7 +200,7 @@ class SyncStrategies:
                 phone=phone,
                 token_status=item.get('token', {}).get('status', '1'),
             )
-            logger.info(f"Synced {full_name} (card {card_number}) → AG card {ag_card_id}")
+            logger.info(f"Synced {full_name} → AG card {ag_card_id}")
             return True
 
         except AccessGridError as e:
@@ -316,7 +299,7 @@ class SyncStrategies:
             logger.error(f"Failed to list AG cards: {e}")
             return 0
 
-        ag_card_map = {c.get('id'): c for c in ag_cards if c.get('id')}
+        ag_card_map = {c.id: c for c in ag_cards if c.id}
         updated = 0
 
         for record in synced:
@@ -328,7 +311,7 @@ class SyncStrategies:
             if not ag_card:
                 continue
 
-            ag_state             = ag_card.get('state', 'active').lower()
+            ag_state             = (getattr(ag_card, 'state', 'active') or 'active').lower()
             desired_plasec       = AG_TO_PLASEC_STATUS.get(ag_state)
             current_plasec       = record.get('last_synced_token_status', '1')
 
@@ -420,9 +403,9 @@ class SyncStrategies:
                 if cur_email != record.get('last_synced_email', ''):
                     update_params['email'] = cur_email
                 if cur_phone != record.get('last_synced_phone', ''):
-                    update_params['phone'] = cur_phone
+                    update_params['phone_number'] = cur_phone
 
-                self.ag.access_cards.update(ag_card_id, **update_params)
+                self.ag.access_cards.update(card_id=ag_card_id, **update_params)
                 self.db.update_field_snapshot(iid, tid, cur_name, cur_email, cur_phone)
                 changed += 1
 
@@ -456,15 +439,15 @@ class SyncStrategies:
 
     def _apply_ag_action(self, ag_card_id: str, action: str):
         if action == 'suspended':
-            self.ag.access_cards.suspend(ag_card_id)
+            self.ag.access_cards.suspend(card_id=ag_card_id)
         elif action == 'active':
-            self.ag.access_cards.activate(ag_card_id)
+            self.ag.access_cards.resume(card_id=ag_card_id)
         elif action in ('deleted', 'terminated'):
             self._delete_ag_card(ag_card_id)
 
     def _delete_ag_card(self, ag_card_id: str):
         try:
-            self.ag.access_cards.delete(ag_card_id)
+            self.ag.access_cards.delete(card_id=ag_card_id)
             logger.info(f"Deleted AG card {ag_card_id}")
         except AccessGridError as e:
             if 'not found' in str(e).lower() or '404' in str(e):

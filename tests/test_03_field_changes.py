@@ -64,7 +64,7 @@ class Test03FieldChanges(BaseSyncTest):
 
         self.assertEqual(metrics['field_changes'], 1)
         self.ag_client.access_cards.update.assert_called_once_with(
-            AG_CARD_ID, email='new.email@example.com'
+            card_id=AG_CARD_ID, email='new.email@example.com'
         )
 
         print("  AG update called with new email")
@@ -96,7 +96,7 @@ class Test03FieldChanges(BaseSyncTest):
 
         self.assertEqual(metrics['field_changes'], 1)
         self.ag_client.access_cards.update.assert_called_once_with(
-            AG_CARD_ID, full_name='Updated Name'
+            card_id=AG_CARD_ID, full_name='Updated Name'
         )
 
         print("  AG update called with new name")

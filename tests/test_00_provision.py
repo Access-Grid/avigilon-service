@@ -49,15 +49,15 @@ class Test00Provision(BaseSyncTest):
         self.assertEqual(metrics['new'], 1, "Expected 1 new card provisioned")
 
         # Verify AG was called with the correct data
-        self.ag_client.access_cards.create.assert_called_once()
-        create_kwargs = self.ag_client.access_cards.create.call_args.kwargs
-        self.assertEqual(create_kwargs['template_id'], TEMPLATE_ID)
-        self.assertEqual(create_kwargs['card_number'], CARD_NUMBER)
+        self.ag_client.access_cards.provision.assert_called_once()
+        create_kwargs = self.ag_client.access_cards.provision.call_args.kwargs
+        self.assertEqual(create_kwargs['card_template_id'], TEMPLATE_ID)
+        self.assertEqual(create_kwargs['employee_id'], IDENTITY_ID)
         self.assertEqual(create_kwargs['full_name'], 'Test Person')
         self.assertEqual(create_kwargs['email'], 'test.person@example.com')
-        self.assertEqual(create_kwargs['phone'], '555-1234')
+        self.assertEqual(create_kwargs['phone_number'], '555-1234')
 
-        print(f"  AG create called with card_number={create_kwargs['card_number']}, "
+        print(f"  AG provision called with employee_id={create_kwargs['employee_id']}, "
               f"full_name={create_kwargs['full_name']!r}")
 
     def test_01_sync_record_written_to_db(self):
@@ -84,8 +84,8 @@ class Test00Provision(BaseSyncTest):
         metrics = self.strategies.run_cycle()
 
         self.assertEqual(metrics['new'], 0, "Should not provision again on second cycle")
-        self.assertEqual(self.ag_client.access_cards.create.call_count, 1,
-                         "AG create should only be called once")
+        self.assertEqual(self.ag_client.access_cards.provision.call_count, 1,
+                         "AG provision should only be called once")
 
         print("  Second cycle: no new provisions (idempotent)")
 
@@ -110,7 +110,7 @@ class Test00Provision(BaseSyncTest):
         metrics = self.strategies.run_cycle()
 
         self.assertEqual(metrics['new'], 0, "Should skip identity with no contact info")
-        self.ag_client.access_cards.create.assert_not_called()
+        self.ag_client.access_cards.provision.assert_not_called()
 
         print("  Correctly skipped identity with no email/phone")
 

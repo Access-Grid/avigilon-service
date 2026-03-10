@@ -42,7 +42,7 @@ class Test02Deletion(BaseSyncTest):
         metrics = self.strategies.run_cycle()
 
         self.assertEqual(metrics['deleted'], 1, "Expected 1 identity deletion")
-        self.ag_client.access_cards.delete.assert_called_once_with(AG_CARD_ID)
+        self.ag_client.access_cards.delete.assert_called_once_with(card_id=AG_CARD_ID)
 
         print(f"  AG delete called for card {AG_CARD_ID}")
 
@@ -76,7 +76,7 @@ class Test02Deletion(BaseSyncTest):
         metrics = self.strategies.run_cycle()
 
         self.assertEqual(metrics['orphaned'], 1, "Expected 1 orphaned token deletion")
-        self.ag_client.access_cards.delete.assert_called_once_with(AG_CARD_ID)
+        self.ag_client.access_cards.delete.assert_called_once_with(card_id=AG_CARD_ID)
 
         print(f"  AG delete called for orphaned card {AG_CARD_ID}")
 

@@ -43,7 +43,7 @@ class Test01PlasecStatusChange(BaseSyncTest):
         metrics = self.strategies.run_cycle()
 
         self.assertEqual(metrics['status_changes'], 1, "Expected 1 status change")
-        self.ag_client.access_cards.suspend.assert_called_once_with(AG_CARD_ID)
+        self.ag_client.access_cards.suspend.assert_called_once_with(card_id=AG_CARD_ID)
 
         print(f"  AG suspend called for card {AG_CARD_ID}")
 
@@ -104,9 +104,9 @@ class Test01PlasecStatusChange(BaseSyncTest):
         metrics = self.strategies.run_cycle()
 
         self.assertEqual(metrics['status_changes'], 1)
-        self.ag_client.access_cards.activate.assert_called_once_with(AG_CARD_ID)
+        self.ag_client.access_cards.resume.assert_called_once_with(card_id=AG_CARD_ID)
 
-        print(f"  AG activate called for card {AG_CARD_ID}")
+        print(f"  AG resume called for card {AG_CARD_ID}")
 
 
 if __name__ == '__main__':

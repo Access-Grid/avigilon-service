@@ -81,7 +81,9 @@ class BaseSyncTest(unittest.TestCase):
 
         # --- Mock AccessGrid client ---
         self.ag_client = MagicMock()
-        self.ag_client.access_cards.create.return_value = {'id': AG_CARD_ID}
+        mock_card = MagicMock()
+        mock_card.id = AG_CARD_ID
+        self.ag_client.access_cards.provision.return_value = mock_card
 
         # --- SyncStrategies ---
         self.strategies = SyncStrategies(
