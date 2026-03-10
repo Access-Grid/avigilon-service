@@ -6,13 +6,15 @@ import sys
 
 block_cipher = None
 
+_logo = 'assets/logo.png'
+_datas = [(_logo, 'assets')] if os.path.exists(_logo) else []
+_icon  = _logo if os.path.exists(_logo) else None
+
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('assets/logo.png', 'assets'),
-    ],
+    datas=_datas,
     hiddenimports=[
         'accessgrid',
         'requests',
@@ -65,7 +67,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='assets/logo.png',
+    icon=_icon,
 )
 
 # macOS: wrap the single-file binary in a proper .app bundle
@@ -73,7 +75,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(
         exe,
         name='AccessGridAvigilonAgent.app',
-        icon='assets/logo.png',
+        icon=_icon,
         bundle_identifier='com.accessgrid.avigilon-agent',
         info_plist={
             'NSHighResolutionCapable': True,
