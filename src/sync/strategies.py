@@ -210,6 +210,13 @@ class SyncStrategies:
             )
 
             if not is_seos:
+                logger.debug(
+                    f"Non-seos provision for {iid}/{tid}: "
+                    f"facility_code={self.default_facility_code!r}, "
+                    f"card_number={card_number!r}, "
+                    f"card_len={self.card_len!r}, "
+                    f"max_bits={self.max_bits!r}"
+                )
                 try:
                     file_data = self._build_file_data(
                         facility_code=int(self.default_facility_code or 0),
@@ -217,11 +224,17 @@ class SyncStrategies:
                         card_len=int(self.card_len or 0),
                         max_bits=int(self.max_bits or 0),
                     )
+                    logger.debug(f"_build_file_data returned: {file_data!r}")
                     if file_data:
                         provision_kwargs['file_data'] = file_data
+                    else:
+                        logger.debug("file_data is empty — not including in provision call")
                 except (ValueError, TypeError) as e:
                     logger.warning(f"Could not build file_data for {iid}/{tid}: {e}")
+            else:
+                logger.debug(f"Seos provision for {iid}/{tid} — skipping file_data")
 
+            logger.debug(f"provision_kwargs: {provision_kwargs}")
             result = self.ag.access_cards.provision(**provision_kwargs)
             ag_card_id = result.id
             if not ag_card_id:

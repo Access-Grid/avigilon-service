@@ -515,7 +515,8 @@ class PlaSecClient:
 
     def _normalize_card_format(self, raw: Dict) -> Dict:
         """Normalize a raw Plasec card_format dict."""
-        return {
+        logger.debug(f"_normalize_card_format raw input: {raw}")
+        result = {
             'id':            raw.get('cn', '') or raw.get('id', ''),
             'name':          str(raw.get('plasecName', '') or ''),
             'facility_code': str(raw.get('plaseccfmtFacilitycode', '') or ''),
@@ -523,6 +524,8 @@ class PlaSecClient:
             'max_bits':      str(raw.get('plaseccfmtMaxbits', '') or ''),
             'format_type':   str(raw.get('plaseccfmtType', '') or ''),
         }
+        logger.debug(f"_normalize_card_format result: {result}")
+        return result
 
     def _normalize_identity(self, raw: Dict) -> Dict:
         """

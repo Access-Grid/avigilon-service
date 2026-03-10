@@ -116,15 +116,19 @@ class SyncEngine:
         # --- AG template protocol (seos / desfire / smart_tap / ...) ---
         try:
             tmpl = self.ag.console.read_template(template_id=template_id)
+            logger.debug(f"AG template response: {tmpl}")
+            logger.debug(f"AG template attrs: protocol={getattr(tmpl, 'protocol', None)}")
             protocol = getattr(tmpl, 'protocol', '') or ''
             self.strategies.template_protocol = protocol.lower()
             logger.info(f"Template {template_id} protocol: {protocol!r}")
         except Exception as e:
             logger.warning(f"Could not fetch AG template protocol: {e}")
+            logger.debug(f"template_protocol remains: {self.strategies.template_protocol!r}")
 
         # --- Plasec card format (facility code + bit lengths for file_data) ---
         try:
             formats = self.plasec.get_card_formats()
+            logger.debug(f"Plasec card_formats count: {len(formats)}, data: {formats}")
             if formats:
                 fmt = formats[0]
                 self.strategies.default_facility_code = fmt.get('facility_code', '')
