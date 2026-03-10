@@ -50,6 +50,8 @@ jobs:
         run: choco install upx --no-progress -y
 
       - name: Build with PyInstaller
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: pyinstaller AccessGridAgent.spec
 
       # ---- Platform packaging ----
