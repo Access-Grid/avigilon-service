@@ -528,19 +528,53 @@ class PlaSecClient:
         """
         Normalize a raw Plasec identity dict to our internal format.
 
-        List endpoint returns: {dn, cn, plasecName, plasecIdstatus, plasecLasttime, primaryPhoto}
-        Detail endpoint adds:  plasecFname, plasecLname, plasecidentityEmailaddress,
-                               plasecidentityPhone, plasecidentityWorkphone, etc.
+        Live API — JSON:API shape (detail and list endpoints):
+          {"id": "9af9812cde3b4ecc", "type": "Identity",
+           "attributes": {plasecFname, plasecLname, plasecIdstatus, ...}}
+
+        Legacy flat shape (test fixtures):
+          {"cn": "...", "plasecName": "...", "plasecIdstatus": "Active", ...}
         """
+        if 'attributes' in raw:
+            # JSON:API shape — live Plasec API
+            attrs = raw.get('attributes', {})
+            identity_id = raw.get('id', '') or attrs.get('cn', '')
+
+            first_name  = attrs.get('plasecFname', '') or ''
+            last_name   = attrs.get('plasecLname', '') or ''
+            plasec_name = attrs.get('plasecName', '') or ''
+
+            if not first_name and not last_name and plasec_name:
+                parts = [p.strip() for p in plasec_name.split(',')]
+                last_name  = parts[0] if parts else ''
+                first_name = parts[1] if len(parts) > 1 else ''
+
+            full_name = f"{first_name} {last_name}".strip() or plasec_name
+
+            raw_status = str(attrs.get('plasecIdstatus', '') or '')
+            status = self._normalize_identity_status(raw_status)
+
+            return {
+                'id':         identity_id,
+                'first_name': first_name,
+                'last_name':  last_name,
+                'full_name':  full_name,
+                'email':      attrs.get('plasecidentityEmailaddress', '') or '',
+                'phone':      attrs.get('plasecidentityPhone', '') or '',
+                'work_phone': attrs.get('plasecidentityWorkphone', '') or '',
+                'status':     status,
+                'title':      attrs.get('plasecidentityTitle', '') or '',
+                'department': attrs.get('plasecidentityDepartment', '') or '',
+            }
+
+        # Legacy flat shape (test fixtures / older API versions)
         identity_id = raw.get('cn', '') or raw.get('id', '')
 
-        # Prefer split fields (detail endpoint); fall back to parsing plasecName
-        first_name = raw.get('plasecFname', '') or ''
-        last_name  = raw.get('plasecLname', '') or ''
+        first_name  = raw.get('plasecFname', '') or ''
+        last_name   = raw.get('plasecLname', '') or ''
         plasec_name = raw.get('plasecName', '') or ''
 
         if not first_name and not last_name and plasec_name:
-            # Format is "Lastname, Firstname" or "Lastname, Firstname, MI"
             parts = [p.strip() for p in plasec_name.split(',')]
             last_name  = parts[0] if parts else ''
             first_name = parts[1] if len(parts) > 1 else ''
@@ -613,12 +647,30 @@ class PlaSecClient:
           {"cn": "...", "plasecInternalnumber": "...", "plasecTokenstatus": "1", ...}
         """
         if 'attributes' in raw:
-            # JSON:API shape — live Plasec API
+            # JSON:API shape — live Plasec API.
+            # Two sub-variants depending on which endpoint returned the token:
+            #
+            #  a) Tokens-list endpoint  → status in extended_attributes.token_status (string)
+            #     dates in extended_attributes.formatted_*_date
+            #  b) Identity-detail endpoint → status as plasecTokenstatus (integer)
+            #     dates as direct plasecActivatedate / plasecDeactivatedate / plasecIssuedate
             attrs = raw.get('attributes', {})
             ext   = attrs.get('extended_attributes', {})
 
-            raw_status = str(ext.get('token_status', '') or '').lower()
-            status = self._TOKEN_STATUS_MAP.get(raw_status, '1')
+            if ext:
+                # Variant (a): tokens list
+                raw_status = str(ext.get('token_status', '') or '').lower()
+                status = self._TOKEN_STATUS_MAP.get(raw_status, '1')
+                issue_date      = ext.get('formatted_issue_date', '') or ''
+                activate_date   = ext.get('formatted_activate_date', '') or ''
+                deactivate_date = ext.get('formatted_deactivate_date', '') or ''
+            else:
+                # Variant (b): embedded in identity detail
+                raw_status = str(attrs.get('plasecTokenstatus', '1') or '1')
+                status = self._normalize_identity_status(raw_status)
+                issue_date      = attrs.get('plasecIssuedate', '') or ''
+                activate_date   = attrs.get('plasecActivatedate', '') or ''
+                deactivate_date = attrs.get('plasecDeactivatedate', '') or ''
 
             return {
                 'id':              raw.get('id', '') or attrs.get('cn', ''),
@@ -627,11 +679,11 @@ class PlaSecClient:
                 'embossed_number': str(attrs.get('plasecEmbossednumber', '') or ''),
                 'pin':             str(attrs.get('plasecPIN', '') or ''),
                 'status':          status,
-                'token_type':      str(attrs.get('TokenTypeId', '0') or '0'),
+                'token_type':      str(attrs.get('TokenTypeId') or attrs.get('plasecTokenType', '0') or '0'),
                 'level':           str(attrs.get('plasecTokenlevel', '0') or '0'),
-                'issue_date':      ext.get('formatted_issue_date', '') or '',
-                'activate_date':   ext.get('formatted_activate_date', '') or '',
-                'deactivate_date': ext.get('formatted_deactivate_date', '') or '',
+                'issue_date':      issue_date,
+                'activate_date':   activate_date,
+                'deactivate_date': deactivate_date,
             }
 
         # Legacy flat shape (test fixtures / older API versions)
