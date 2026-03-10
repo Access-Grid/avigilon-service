@@ -92,7 +92,7 @@ jobs:
           name: windows-build
           path: dist/AccessGridAvigilonAgent-windows.exe
 
-  # ---- Create GitHub Release on tag push ----
+  # ---- Update rolling "latest" release on every merge to main ----
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -100,17 +100,26 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
           path: dist
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/AccessGridAvigilonAgent-macos.zip
-            dist/AccessGridAvigilonAgent-linux.tar.gz
+      - name: Publish latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Remove the old latest release and tag (silent if they don't exist yet)
+          gh release delete latest --yes 2>/dev/null || true
+          git tag -f latest ${{ github.sha }}
+          git push origin latest --force
+
+          gh release create latest \
+            --title "Latest Build" \
+            --notes "Built from \`${{ github.sha }}\` on \`${{ github.ref_name }}\`" \
+            --prerelease \
+            dist/AccessGridAvigilonAgent-macos.zip \
+            dist/AccessGridAvigilonAgent-linux.tar.gz \
             dist/AccessGridAvigilonAgent-windows.exe
-          generate_release_notes: true
-          fail_on_unmatched_files: true
