@@ -235,7 +235,14 @@ class PlaSecClient:
     def get_identity_tokens(self, identity_id: str) -> List[Dict]:
         """
         List all tokens for an identity via GET /identities/{cn}/tokens.json.
-        Token ID is the 'cn' field; card number is plasecInternalnumber.
+
+        Actual Plasec API response shape (confirmed from live capture):
+          {"tokens": [{id, type, attributes: {cn, plasecInternalnumber, ...,
+                       extended_attributes: {token_status, formatted_*_date, ...}}}],
+           "recordsTotal": N, "recordsFiltered": null}
+
+        Test fixtures use a legacy flat shape:
+          {"data": [{"cn": ..., "plasecInternalnumber": ..., "plasecTokenstatus": ...}]}
         """
         resp = self._request(
             'GET', f'/identities/{identity_id}/tokens.json',
@@ -246,11 +253,32 @@ class PlaSecClient:
             return []
         try:
             body = resp.json()
-            items = body.get('data', body) if isinstance(body, dict) else body
-            if isinstance(items, list):
-                return [self._normalize_token(t, identity_id) for t in items]
+
+            if isinstance(body, list):
+                items = body
+            elif isinstance(body, dict):
+                # Live API uses "tokens"; test fixtures use "data"
+                raw_list = body.get('tokens') or body.get('data')
+                if isinstance(raw_list, list):
+                    items = raw_list
+                elif isinstance(raw_list, dict) and raw_list:
+                    items = [raw_list]
+                else:
+                    items = []
+            else:
+                items = []
+
+            if not items and resp.content and len(resp.content) > 20:
+                logger.debug(
+                    f"get_identity_tokens {identity_id}: 0 tokens parsed from "
+                    f"{len(resp.content)}-byte response — body: {resp.text[:400]}"
+                )
+                return []
+
+            return [self._normalize_token(t, identity_id) for t in items]
         except Exception as e:
             logger.error(f"get_identity_tokens {identity_id} parse failed: {e}")
+            logger.debug(f"Raw response: {resp.text[:400]}")
         return []
 
     def create_identity(self, data: Dict) -> Optional[str]:
@@ -551,13 +579,62 @@ class PlaSecClient:
             return raw
         return '1'
 
+    _TOKEN_STATUS_MAP = {
+        'active':        '1',
+        'inactive':      '2',
+        'not yet active': '3',
+        'expired':       '4',
+    }
+
     def _normalize_token(self, raw: Dict, identity_id: str = '') -> Dict:
         """
-        Normalize a raw Plasec token dict.
+        Normalize a raw Plasec token dict to our internal format.
 
-        Token ID is the 'cn' field.
-        Card number for AccessGrid provisioning is plasecInternalnumber.
+        Live API shape (JSON:API):
+          {
+            "id": "7480262f02d94970",
+            "type": "Token",
+            "attributes": {
+              "cn": "7480262f02d94970",
+              "plasecInternalnumber": "42069",
+              "plasecEmbossednumber": "9",
+              "plasecTokenlevel": "0",
+              "TokenTypeId": 0,
+              "extended_attributes": {
+                "token_status": "Active",          <- string, not numeric
+                "formatted_activate_date": "...",
+                "formatted_deactivate_date": "...",
+                "formatted_issue_date": "..."
+              }
+            }
+          }
+
+        Legacy flat shape (test fixtures / older API versions):
+          {"cn": "...", "plasecInternalnumber": "...", "plasecTokenstatus": "1", ...}
         """
+        if 'attributes' in raw:
+            # JSON:API shape — live Plasec API
+            attrs = raw.get('attributes', {})
+            ext   = attrs.get('extended_attributes', {})
+
+            raw_status = str(ext.get('token_status', '') or '').lower()
+            status = self._TOKEN_STATUS_MAP.get(raw_status, '1')
+
+            return {
+                'id':              raw.get('id', '') or attrs.get('cn', ''),
+                'identity_id':     identity_id,
+                'internal_number': str(attrs.get('plasecInternalnumber', '') or ''),
+                'embossed_number': str(attrs.get('plasecEmbossednumber', '') or ''),
+                'pin':             str(attrs.get('plasecPIN', '') or ''),
+                'status':          status,
+                'token_type':      str(attrs.get('TokenTypeId', '0') or '0'),
+                'level':           str(attrs.get('plasecTokenlevel', '0') or '0'),
+                'issue_date':      ext.get('formatted_issue_date', '') or '',
+                'activate_date':   ext.get('formatted_activate_date', '') or '',
+                'deactivate_date': ext.get('formatted_deactivate_date', '') or '',
+            }
+
+        # Legacy flat shape (test fixtures / older API versions)
         return {
             'id':              raw.get('cn', '') or raw.get('id', ''),
             'identity_id':     identity_id,
