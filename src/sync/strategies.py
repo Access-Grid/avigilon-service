@@ -58,11 +58,16 @@ class SyncStrategies:
         local_db: LocalDB,
         ag_client: AccessGrid,
         template_id: str,
+        template_protocol: str = '',
+        default_facility_code: str = '',
     ):
-        self.plasec      = plasec_client
-        self.db          = local_db
-        self.ag          = ag_client
-        self.template_id = template_id
+        self.plasec                 = plasec_client
+        self.db                     = local_db
+        self.ag                     = ag_client
+        self.template_id            = template_id
+        # 'seos' = HID (no card data needed); others = DESFire/SmartTap (need site_code + card_number)
+        self.template_protocol      = template_protocol.lower() if template_protocol else ''
+        self.default_facility_code  = default_facility_code
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -169,7 +174,10 @@ class SyncStrategies:
         email       = item.get('identity', {}).get('email', '')
         phone       = item.get('identity', {}).get('phone', '')
 
-        if not card_number:
+        is_seos = self.template_protocol == 'seos'
+
+        # Non-HID templates require card data; HID/Seos provisions by cardholder info only
+        if not is_seos and not card_number:
             logger.warning(f"Skipping identity {iid} token {tid}: no card number")
             return False
         if not full_name:
@@ -180,15 +188,21 @@ class SyncStrategies:
             return False
 
         try:
-            result = self.ag.access_cards.create(
+            create_kwargs: Dict = dict(
                 template_id=self.template_id,
-                card_number=card_number,
                 full_name=full_name,
                 email=email,
                 phone=phone,
                 start_date=item.get('activate_date') or None,
                 expiration_date=item.get('deactivate_date') or None,
             )
+            if not is_seos:
+                # DESFire / SmartTap: supply card number and facility code (site code)
+                create_kwargs['card_number'] = card_number
+                if self.default_facility_code:
+                    create_kwargs['site_code'] = self.default_facility_code
+
+            result = self.ag.access_cards.create(**create_kwargs)
             ag_card_id = result.get('id') or result.get('card_id', '')
             if not ag_card_id:
                 raise ValueError(f"AccessGrid returned no card ID: {result}")

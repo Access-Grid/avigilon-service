@@ -93,7 +93,13 @@ class PlaSecClient:
                 self._logged_in = True
                 logger.info("Logged in to Plasec")
                 return True
-            logger.error(f"Plasec login: no session cookie (status {resp.status_code})")
+            if resp.status_code == 404:
+                logger.error(
+                    f"Plasec login: 404 Not Found — verify that {self.base_url} "
+                    "is the correct Plasec/ACM server address"
+                )
+            else:
+                logger.error(f"Plasec login: no session cookie (status {resp.status_code})")
         except requests.RequestException as e:
             logger.error(f"Plasec login request failed: {e}")
         return False
@@ -437,6 +443,29 @@ class PlaSecClient:
             logger.error(f"assign_roles for {identity_id} failed: HTTP {resp.status_code}")
         return success
 
+    def get_card_formats(self) -> List[Dict]:
+        """
+        Fetch all card formats via GET /card_formats.json.
+
+        Returns list of dicts with facility_code, card length, etc.
+        Used to derive the facility code (site code) for DESFire / SmartTap provisioning.
+        """
+        resp = self._request(
+            'GET', '/card_formats.json',
+            headers={'Accept': 'application/json'},
+        )
+        if resp.status_code != 200:
+            logger.warning(f"get_card_formats: HTTP {resp.status_code}")
+            return []
+        try:
+            body = resp.json()
+            items = body.get('data', body) if isinstance(body, dict) else body
+            if isinstance(items, list):
+                return [self._normalize_card_format(f) for f in items]
+        except Exception as e:
+            logger.error(f"get_card_formats parse failed: {e}")
+        return []
+
     def test_connection(self) -> bool:
         """Test connectivity: log in and fetch one page of identities."""
         try:
@@ -455,6 +484,17 @@ class PlaSecClient:
     # ------------------------------------------------------------------
     # Response normalization
     # ------------------------------------------------------------------
+
+    def _normalize_card_format(self, raw: Dict) -> Dict:
+        """Normalize a raw Plasec card_format dict."""
+        return {
+            'id':            raw.get('cn', '') or raw.get('id', ''),
+            'name':          str(raw.get('plasecName', '') or ''),
+            'facility_code': str(raw.get('plaseccfmtFacilitycode', '') or ''),
+            'card_length':   str(raw.get('plaseccfmtCardlen', '') or ''),
+            'max_bits':      str(raw.get('plaseccfmtMaxbits', '') or ''),
+            'format_type':   str(raw.get('plaseccfmtType', '') or ''),
+        }
 
     def _normalize_identity(self, raw: Dict) -> Dict:
         """

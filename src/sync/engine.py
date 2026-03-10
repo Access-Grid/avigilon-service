@@ -53,6 +53,7 @@ class SyncEngine:
             local_db=local_db,
             ag_client=ag_client,
             template_id=config['accessgrid']['template_id'],
+            # template_protocol and default_facility_code are resolved at start()
         )
 
         self.running        = False
@@ -106,6 +107,38 @@ class SyncEngine:
     # Internal sync loop
     # ------------------------------------------------------------------
 
+    def _resolve_template_config(self):
+        """
+        Fetch the AG template's protocol and the Plasec default facility code.
+
+        Called once at the start of the sync loop.  Results are stored on
+        self.strategies so they're available for every subsequent cycle.
+        """
+        template_id = self.config['accessgrid']['template_id']
+
+        # --- AG template protocol ---
+        try:
+            tmpl = self.ag.templates.get(template_id)
+            protocol = (tmpl.get('protocol') or '') if isinstance(tmpl, dict) else ''
+            self.strategies.template_protocol = protocol.lower()
+            logger.info(f"Template {template_id} protocol: {protocol!r}")
+        except Exception as e:
+            logger.warning(f"Could not fetch AG template protocol: {e} — defaulting to non-seos")
+
+        # --- Plasec default facility code (first card format found) ---
+        try:
+            formats = self.plasec.get_card_formats()
+            if formats:
+                fc = formats[0].get('facility_code', '')
+                self.strategies.default_facility_code = fc
+                logger.info(
+                    f"Using facility code {fc!r} from card format {formats[0].get('name')!r}"
+                )
+            else:
+                logger.warning("No card formats found in Plasec — site_code will be omitted")
+        except Exception as e:
+            logger.warning(f"Could not fetch Plasec card formats: {e}")
+
     def _sync_loop(self):
         self.running = True
         logger.info(
@@ -115,6 +148,8 @@ class SyncEngine:
         with sentry_sdk.configure_scope() as scope:
             scope.set_tag("template_id", self.config['accessgrid']['template_id'])
             scope.set_tag("plasec_host",  self.config['plasec']['host'])
+
+        self._resolve_template_config()
 
         while self.running:
             try:

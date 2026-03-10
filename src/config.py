@@ -100,21 +100,38 @@ def load_config(encryption_manager: EncryptionManager) -> Optional[Dict]:
 
 
 def save_config(config_data: Dict, encryption_manager: EncryptionManager) -> bool:
-    """Save configuration to encrypted file"""
+    """
+    Save configuration to encrypted file.
+
+    Only the sections present in config_data are written; sections already on
+    disk but absent from config_data are preserved.  This allows the Plasec and
+    AccessGrid dialogs to be saved independently without losing each other's data.
+    """
     try:
         ensure_config_dir()
-        encrypted_config = {
-            'plasec': {
+
+        # Preserve any sections already saved that aren't being updated
+        encrypted_config: Dict = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r') as f:
+                    encrypted_config = json.load(f)
+            except Exception:
+                encrypted_config = {}
+
+        if 'plasec' in config_data:
+            encrypted_config['plasec'] = {
                 'host':     encryption_manager.encrypt(config_data['plasec']['host']),
                 'username': encryption_manager.encrypt(config_data['plasec']['username']),
                 'password': encryption_manager.encrypt(config_data['plasec']['password']),
-            },
-            'accessgrid': {
-                'account_id': encryption_manager.encrypt(config_data['accessgrid']['account_id']),
-                'api_secret': encryption_manager.encrypt(config_data['accessgrid']['api_secret']),
+            }
+
+        if 'accessgrid' in config_data:
+            encrypted_config['accessgrid'] = {
+                'account_id':  encryption_manager.encrypt(config_data['accessgrid']['account_id']),
+                'api_secret':  encryption_manager.encrypt(config_data['accessgrid']['api_secret']),
                 'template_id': encryption_manager.encrypt(config_data['accessgrid']['template_id']),
-            },
-        }
+            }
 
         with open(CONFIG_FILE, 'w') as f:
             json.dump(encrypted_config, f, indent=2)
