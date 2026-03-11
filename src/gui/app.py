@@ -52,6 +52,15 @@ class AccessGridAvigilonGUI:
         self.root.resizable(True, True)
         self.root.minsize(560, 700)
 
+        # Set app icon
+        try:
+            icon_path = os.path.join(os.path.dirname(__file__), '..', '..', 'assets', 'logo.png')
+            icon_img = tk.PhotoImage(file=os.path.abspath(icon_path))
+            self.root.iconphoto(True, icon_img)
+            self._icon_img = icon_img  # prevent garbage collection
+        except Exception:
+            pass
+
         self.encryption   = EncryptionManager()
         self.config: Optional[Dict] = load_config(self.encryption)
 
