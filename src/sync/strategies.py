@@ -276,6 +276,17 @@ class SyncStrategies:
             if token is None:
                 continue  # deletion handled in Phase 3
 
+            # If embossed_number is no longer 'accessgrid', treat as deleted
+            if (token.get('embossed_number', '') or '').lower() != 'accessgrid':
+                logger.info(
+                    f"Token {tid} embossed_number no longer 'accessgrid' — "
+                    f"terminating AG card {ag_card_id}"
+                )
+                self._delete_ag_card(ag_card_id)
+                self.db.mark_deleted(iid, tid)
+                updated += 1
+                continue
+
             current   = token.get('status', '1')
             last_seen = record.get('last_synced_token_status', '1')
             if current == last_seen:
