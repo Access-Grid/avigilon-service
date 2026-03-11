@@ -112,7 +112,7 @@ TOKEN_LIST_ACTIVE = {
         {
             "cn": "54a67bf3a2944214",
             "plasecInternalnumber": "1234",
-            "plasecEmbossednumber": "1234",
+            "plasecEmbossednumber": "AccessGrid",
             "plasecPIN": "5678",
             "plasecTokenstatus": "1",
             "plasecTokenType": "0",
@@ -131,7 +131,7 @@ TOKEN_LIST_INACTIVE = {
         {
             "cn": "54a67bf3a2944214",
             "plasecInternalnumber": "1234",
-            "plasecEmbossednumber": "1234",
+            "plasecEmbossednumber": "AccessGrid",
             "plasecPIN": "5678",
             "plasecTokenstatus": "2",
             "plasecTokenType": "0",

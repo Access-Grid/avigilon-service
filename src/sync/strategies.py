@@ -158,6 +158,8 @@ class SyncStrategies:
                     continue
                 if token.get('status') != PLASEC_TOKEN_STATUS_ACTIVE:
                     continue
+                if (token.get('embossed_number', '') or '').lower() != 'accessgrid':
+                    continue
                 if (iid, tid) in already_synced:
                     continue
 
