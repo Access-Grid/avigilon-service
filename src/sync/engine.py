@@ -130,13 +130,19 @@ class SyncEngine:
             formats = self.plasec.get_card_formats()
             logger.debug(f"Plasec card_formats count: {len(formats)}, data: {formats}")
             if formats:
-                fmt = formats[0]
+                # Pick the first format with a non-empty facility code
+                fmt = next(
+                    (f for f in formats if f.get('facility_code') and f['facility_code'] != 'None'),
+                    formats[0],
+                )
                 self.strategies.default_facility_code = fmt.get('facility_code', '')
-                self.strategies.card_len              = fmt.get('card_length', '')
-                self.strategies.max_bits              = fmt.get('max_bits', '')
+                self.strategies.total_bits            = fmt.get('total_bits', '')
+                self.strategies.fc_bits               = fmt.get('fc_bits', '')
+                self.strategies.cn_bits               = fmt.get('cn_bits', '')
                 logger.info(
                     f"Card format {fmt.get('name')!r}: facility_code={fmt.get('facility_code')!r}, "
-                    f"card_len={fmt.get('card_length')!r}, max_bits={fmt.get('max_bits')!r}"
+                    f"total_bits={fmt.get('total_bits')!r}, "
+                    f"fc_bits={fmt.get('fc_bits')!r}, cn_bits={fmt.get('cn_bits')!r}"
                 )
             else:
                 logger.warning("No card formats found in Plasec")

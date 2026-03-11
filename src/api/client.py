@@ -514,15 +514,22 @@ class PlaSecClient:
     # ------------------------------------------------------------------
 
     def _normalize_card_format(self, raw: Dict) -> Dict:
-        """Normalize a raw Plasec card_format dict."""
+        """Normalize a raw Plasec card_format dict (handles JSON:API attributes)."""
         logger.debug(f"_normalize_card_format raw input: {raw}")
+        if 'attributes' in raw:
+            attrs = raw.get('attributes', {})
+            fmt_id = raw.get('id', '') or attrs.get('cn', '')
+        else:
+            attrs = raw
+            fmt_id = raw.get('cn', '') or raw.get('id', '')
         result = {
-            'id':            raw.get('cn', '') or raw.get('id', ''),
-            'name':          str(raw.get('plasecName', '') or ''),
-            'facility_code': str(raw.get('plaseccfmtFacilitycode', '') or ''),
-            'card_length':   str(raw.get('plaseccfmtCardlen', '') or ''),
-            'max_bits':      str(raw.get('plaseccfmtMaxbits', '') or ''),
-            'format_type':   str(raw.get('plaseccfmtType', '') or ''),
+            'id':            str(fmt_id),
+            'name':          str(attrs.get('plasecName', '') or ''),
+            'facility_code': str(attrs.get('plaseccfmtFacilitycode', '') or ''),
+            'total_bits':    str(attrs.get('plaseccfmtMaxdigits', '') or ''),
+            'fc_bits':       str(attrs.get('plaseccfmtFcodelen', '') or ''),
+            'cn_bits':       str(attrs.get('plaseccfmtCardlen', '') or ''),
+            'format_type':   str(attrs.get('plaseccfmtType', '') or ''),
         }
         logger.debug(f"_normalize_card_format result: {result}")
         return result

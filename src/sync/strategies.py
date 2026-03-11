@@ -52,15 +52,6 @@ class _CycleSnapshot:
 class SyncStrategies:
     """Sync logic between Plasec (source) and AccessGrid (destination)."""
 
-    # Standard Wiegand format: {card_len_bits: (fc_bits, cn_bits)}
-    _WIEGAND_FORMATS: Dict[int, tuple] = {
-        26: (8,  16),
-        34: (16, 16),
-        35: (12, 20),
-        36: (8,  26),
-        37: (16, 19),
-    }
-
     def __init__(
         self,
         plasec_client: PlaSecClient,
@@ -69,8 +60,9 @@ class SyncStrategies:
         template_id: str,
         template_protocol: str = '',
         default_facility_code: str = '',
-        card_len: str = '',
-        max_bits: str = '',
+        total_bits: str = '',
+        fc_bits: str = '',
+        cn_bits: str = '',
     ):
         self.plasec                 = plasec_client
         self.db                     = local_db
@@ -78,8 +70,9 @@ class SyncStrategies:
         self.template_id            = template_id
         self.template_protocol      = template_protocol.lower() if template_protocol else ''
         self.default_facility_code  = default_facility_code
-        self.card_len               = card_len
-        self.max_bits               = max_bits
+        self.total_bits             = total_bits
+        self.fc_bits                = fc_bits
+        self.cn_bits                = cn_bits
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -214,15 +207,17 @@ class SyncStrategies:
                     f"Non-seos provision for {iid}/{tid}: "
                     f"facility_code={self.default_facility_code!r}, "
                     f"card_number={card_number!r}, "
-                    f"card_len={self.card_len!r}, "
-                    f"max_bits={self.max_bits!r}"
+                    f"total_bits={self.total_bits!r}, "
+                    f"fc_bits={self.fc_bits!r}, "
+                    f"cn_bits={self.cn_bits!r}"
                 )
                 try:
                     file_data = self._build_file_data(
                         facility_code=int(self.default_facility_code or 0),
                         card_number=int(card_number),
-                        card_len=int(self.card_len or 0),
-                        max_bits=int(self.max_bits or 0),
+                        total_bits=int(self.total_bits or 0),
+                        fc_bits=int(self.fc_bits or 0),
+                        cn_bits=int(self.cn_bits or 0),
                     )
                     logger.debug(f"_build_file_data returned: {file_data!r}")
                     if file_data:
@@ -488,27 +483,25 @@ class SyncStrategies:
         }
 
     @staticmethod
-    def _build_file_data(facility_code: int, card_number: int, card_len: int, max_bits: int) -> str:
+    def _build_file_data(
+        facility_code: int, card_number: int,
+        total_bits: int, fc_bits: int, cn_bits: int,
+    ) -> str:
         """
         Encode a Wiegand credential as a hex string for DESFire/SmartTap provisioning.
 
         Layout: even_parity(1) | facility_code(fc_bits) | card_number(cn_bits) | odd_parity(1)
-        Result is zero-padded to ceil(max_bits/8) bytes, max 32 bytes, big-endian.
+        total_bits, fc_bits, cn_bits come directly from the Plasec card format.
+        Result is big-endian, ceil(total_bits/8) bytes, max 32 bytes.
         """
-        if card_len < 4:
+        if total_bits < 4 or fc_bits < 1 or cn_bits < 1:
             return ''
-
-        data_bits = card_len - 2  # strip 2 parity bits
-        fc_bits, cn_bits = SyncStrategies._WIEGAND_FORMATS.get(
-            card_len, (max(8, data_bits // 4), 0)
-        )
-        if not cn_bits:
-            cn_bits = data_bits - fc_bits
 
         fc = facility_code & ((1 << fc_bits) - 1)
         cn = card_number   & ((1 << cn_bits) - 1)
 
-        # Split data bits into upper / lower halves for parity computation
+        # Split data bits (fc + cn) into halves for parity computation
+        data_bits  = fc_bits + cn_bits
         upper_half = data_bits // 2
         lower_half = data_bits - upper_half
 
@@ -525,13 +518,11 @@ class SyncStrategies:
         # Odd parity: total 1s (parity bit + lower_data) must be odd
         odd_p  = 1 - (bin(lower_data).count('1') % 2)
 
-        packed = (even_p << (card_len - 1)) | (fc << (cn_bits + 1)) | (cn << 1) | odd_p
+        packed = (even_p << (total_bits - 1)) | (fc << (cn_bits + 1)) | (cn << 1) | odd_p
 
-        num_bytes   = (card_len  + 7) // 8
-        total_bytes = min(32, max(num_bytes, (max_bits + 7) // 8))
-        card_bytes  = packed.to_bytes(num_bytes, byteorder='big')
-        padded      = card_bytes + b'\x00' * max(0, total_bytes - num_bytes)
-        return padded.hex()
+        num_bytes  = min(32, (total_bits + 7) // 8)
+        card_bytes = packed.to_bytes(num_bytes, byteorder='big')
+        return card_bytes.hex()
 
     def _apply_ag_action(self, ag_card_id: str, action: str):
         if action == 'suspended':
