@@ -80,11 +80,15 @@ def load_config(encryption_manager: EncryptionManager) -> Optional[Dict]:
             with open(CONFIG_FILE, 'r') as f:
                 encrypted_config = json.load(f)
 
+            plasec_section = encrypted_config.get('plasec', {})
             config = {
                 'plasec': {
-                    'host':     encryption_manager.decrypt(encrypted_config['plasec']['host']),
-                    'username': encryption_manager.decrypt(encrypted_config['plasec']['username']),
-                    'password': encryption_manager.decrypt(encrypted_config['plasec']['password']),
+                    'host':             encryption_manager.decrypt(plasec_section['host']),
+                    'username':         encryption_manager.decrypt(plasec_section['username']),
+                    'password':         encryption_manager.decrypt(plasec_section['password']),
+                    'card_format_id':   plasec_section.get('card_format_id', ''),
+                    'card_format_name': plasec_section.get('card_format_name', ''),
+                    'facility_code':    plasec_section.get('facility_code', ''),
                 },
                 'accessgrid': {
                     'account_id': encryption_manager.decrypt(encrypted_config['accessgrid']['account_id']),
@@ -121,9 +125,12 @@ def save_config(config_data: Dict, encryption_manager: EncryptionManager) -> boo
 
         if 'plasec' in config_data:
             encrypted_config['plasec'] = {
-                'host':     encryption_manager.encrypt(config_data['plasec']['host']),
-                'username': encryption_manager.encrypt(config_data['plasec']['username']),
-                'password': encryption_manager.encrypt(config_data['plasec']['password']),
+                'host':             encryption_manager.encrypt(config_data['plasec']['host']),
+                'username':         encryption_manager.encrypt(config_data['plasec']['username']),
+                'password':         encryption_manager.encrypt(config_data['plasec']['password']),
+                'card_format_id':   config_data['plasec'].get('card_format_id', ''),
+                'card_format_name': config_data['plasec'].get('card_format_name', ''),
+                'facility_code':    config_data['plasec'].get('facility_code', ''),
             }
 
         if 'accessgrid' in config_data:

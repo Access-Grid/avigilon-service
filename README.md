@@ -23,11 +23,17 @@ Only tokens with **Embossed Number = "AccessGrid"** are synced. Tokens whose emb
 
 In Avigilon Unity, set the token's **Embossed Number** field to `AccessGrid` to mark it for mobile credential provisioning. Tokens without this marker are ignored.
 
-## Card format & file_data
+## Card format & provisioning
 
-For **DESFire / SmartTap** templates, the agent reads the Plasec card format (facility code, bit lengths) and encodes Wiegand credential data as `file_data` in the AccessGrid provision call. **SEOS** templates provision by cardholder info only — no card data is sent.
+For **DESFire / SmartTap** templates, the agent sends the Plasec card format's `site_code` (facility code) and `card_number` to AccessGrid during provisioning. **SEOS** templates provision by cardholder info only — no card data is sent.
 
-## Setup
+The card format is selected during Plasec configuration — after a successful test connection, the available card formats are loaded and the operator picks which one to use.
+
+## Download
+
+Pre-built executables for Windows and macOS are available on the [Releases](https://github.com/Access-Grid/avigilon-service/releases) page. Download the latest release for your platform — no Python installation required.
+
+## Setup (from source)
 
 ### Prerequisites
 
@@ -54,9 +60,10 @@ python -m src.main
 ### Configure
 
 1. Click **Plasec Settings** — enter the Avigilon Unity server IP, username, and password
-2. Click **AG Settings** — enter your AccessGrid Account ID, API Secret, and Template ID
-3. Click **Test Connection** on each to verify
-4. Click **Start Sync**
+2. Click **Test Connection** — on success, available card formats are loaded; select the one to use
+3. Click **AG Settings** — enter your AccessGrid Account ID, API Secret, and Template ID
+4. Click **Test Connection** on AG settings to verify
+5. Click **Start Sync**
 
 Configuration is encrypted at rest using Fernet (AES-128-CBC + HMAC-SHA256) and stored in:
 
@@ -89,7 +96,7 @@ pytest tests/ -v
 src/
   api/client.py        Plasec/Avigilon Unity HTTP client
   sync/engine.py       Sync loop orchestration
-  sync/strategies.py   6-phase sync logic + Wiegand file_data encoding
+  sync/strategies.py   6-phase sync logic
   sync/local_db.py     SQLite sync state tracking
   gui/app.py           Tkinter desktop GUI
   config.py            Encrypted config management

@@ -27,29 +27,33 @@ class PlaSecConfigDialog:
 
     def __init__(self, parent, current_config: Optional[Dict] = None):
         self.result = None
+        self._card_formats = []  # populated after test connection
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Plasec / Avigilon Unity Configuration")
-        self.dialog.geometry("520x300")
+        self.dialog.geometry("520x400")
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
         self.dialog.update_idletasks()
         x = (self.dialog.winfo_screenwidth()  // 2) - 260
-        y = (self.dialog.winfo_screenheight() // 2) - 150
-        self.dialog.geometry(f"520x300+{x}+{y}")
+        y = (self.dialog.winfo_screenheight() // 2) - 200
+        self.dialog.geometry(f"520x400+{x}+{y}")
 
         # Variables
         self.host     = tk.StringVar()
         self.username = tk.StringVar()
         self.password = tk.StringVar()
+        self.card_format_var = tk.StringVar()
 
         if current_config and 'plasec' in current_config:
             pc = current_config['plasec']
             self.host.set(pc.get('host', ''))
             self.username.set(pc.get('username', ''))
             self.password.set(pc.get('password', ''))
+            if pc.get('card_format_name'):
+                self.card_format_var.set(pc['card_format_name'])
 
         self._build_ui()
         self.dialog.wait_window()
@@ -76,6 +80,17 @@ class PlaSecConfigDialog:
             ttk.Entry(form, textvariable=self.username, width=34), 1)
         row("Password:",
             ttk.Entry(form, textvariable=self.password, show="*", width=34), 2)
+
+        ttk.Label(form, text="Card Format:").grid(row=3, column=0, sticky=tk.W, pady=6)
+        self._format_combo = ttk.Combobox(
+            form, textvariable=self.card_format_var, state='readonly', width=32
+        )
+        self._format_combo.grid(row=3, column=1, sticky=tk.EW, pady=6, padx=(12, 0))
+        self._format_hint = ttk.Label(
+            form, text="Test connection first to load card formats",
+            font=('Arial', 8), foreground='gray',
+        )
+        self._format_hint.grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(0, 4))
 
         btns = ttk.Frame(main)
         btns.pack(fill=tk.X, pady=(16, 0))
@@ -115,6 +130,25 @@ class PlaSecConfigDialog:
                 verify_ssl=False,
             )
             if client.test_connection():
+                # Fetch card formats and populate dropdown
+                try:
+                    formats = client.get_card_formats()
+                    self._card_formats = formats
+                    display_names = [
+                        f"{f.get('name', 'Unknown')} (FC={f.get('facility_code', 'N/A')})"
+                        for f in formats
+                    ]
+                    self._format_combo['values'] = display_names
+                    if display_names:
+                        # Try to preserve previous selection
+                        if not self.card_format_var.get() or self.card_format_var.get() not in display_names:
+                            self._format_combo.current(0)
+                        self._format_hint.config(text=f"Found {len(formats)} card format(s)")
+                    else:
+                        self._format_hint.config(text="No card formats found on server")
+                except Exception as e:
+                    self._format_hint.config(text=f"Could not load card formats: {e}")
+
                 messagebox.showinfo(
                     "Success",
                     f"Connected to Plasec at {host}\nAuthentication successful."
@@ -133,11 +167,22 @@ class PlaSecConfigDialog:
     def _ok(self):
         if not self._validate():
             return
-        self.result = {
+
+        result = {
             'host':     self.host.get().strip(),
             'username': self.username.get().strip(),
             'password': self.password.get().strip(),
         }
+
+        # Include selected card format if one was chosen
+        combo_idx = self._format_combo.current()
+        if combo_idx >= 0 and combo_idx < len(self._card_formats):
+            fmt = self._card_formats[combo_idx]
+            result['card_format_id']   = fmt.get('id', '')
+            result['card_format_name'] = fmt.get('name', '')
+            result['facility_code']    = fmt.get('facility_code', '')
+
+        self.result = result
         self.dialog.destroy()
 
 

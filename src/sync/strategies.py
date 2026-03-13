@@ -59,20 +59,14 @@ class SyncStrategies:
         ag_client: AccessGrid,
         template_id: str,
         template_protocol: str = '',
-        default_facility_code: str = '',
-        total_bits: str = '',
-        fc_bits: str = '',
-        cn_bits: str = '',
+        facility_code: str = '',
     ):
-        self.plasec                 = plasec_client
-        self.db                     = local_db
-        self.ag                     = ag_client
-        self.template_id            = template_id
-        self.template_protocol      = template_protocol.lower() if template_protocol else ''
-        self.default_facility_code  = default_facility_code
-        self.total_bits             = total_bits
-        self.fc_bits                = fc_bits
-        self.cn_bits                = cn_bits
+        self.plasec            = plasec_client
+        self.db                = local_db
+        self.ag                = ag_client
+        self.template_id       = template_id
+        self.template_protocol = template_protocol.lower() if template_protocol else ''
+        self.facility_code     = facility_code
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -205,31 +199,15 @@ class SyncStrategies:
             )
 
             if not is_seos:
+                provision_kwargs['card_number'] = card_number
+                if self.facility_code:
+                    provision_kwargs['site_code'] = self.facility_code
                 logger.debug(
                     f"Non-seos provision for {iid}/{tid}: "
-                    f"facility_code={self.default_facility_code!r}, "
-                    f"card_number={card_number!r}, "
-                    f"total_bits={self.total_bits!r}, "
-                    f"fc_bits={self.fc_bits!r}, "
-                    f"cn_bits={self.cn_bits!r}"
+                    f"site_code={self.facility_code!r}, card_number={card_number!r}"
                 )
-                try:
-                    file_data = self._build_file_data(
-                        facility_code=int(self.default_facility_code or 0),
-                        card_number=int(card_number),
-                        total_bits=int(self.total_bits or 0),
-                        fc_bits=int(self.fc_bits or 0),
-                        cn_bits=int(self.cn_bits or 0),
-                    )
-                    logger.debug(f"_build_file_data returned: {file_data!r}")
-                    if file_data:
-                        provision_kwargs['file_data'] = file_data
-                    else:
-                        logger.debug("file_data is empty — not including in provision call")
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"Could not build file_data for {iid}/{tid}: {e}")
             else:
-                logger.debug(f"Seos provision for {iid}/{tid} — skipping file_data")
+                logger.debug(f"Seos provision for {iid}/{tid} — no card data needed")
 
             logger.debug(f"provision_kwargs: {provision_kwargs}")
             result = self.ag.access_cards.provision(**provision_kwargs)
@@ -494,48 +472,6 @@ class SyncStrategies:
             'activate_date':  token.get('activate_date', ''),
             'deactivate_date': token.get('deactivate_date', ''),
         }
-
-    @staticmethod
-    def _build_file_data(
-        facility_code: int, card_number: int,
-        total_bits: int, fc_bits: int, cn_bits: int,
-    ) -> str:
-        """
-        Encode a Wiegand credential as a hex string for DESFire/SmartTap provisioning.
-
-        Layout: even_parity(1) | facility_code(fc_bits) | card_number(cn_bits) | odd_parity(1)
-        total_bits, fc_bits, cn_bits come directly from the Plasec card format.
-        Result is big-endian, ceil(total_bits/8) bytes, max 32 bytes.
-        """
-        if total_bits < 4 or fc_bits < 1 or cn_bits < 1:
-            return ''
-
-        fc = facility_code & ((1 << fc_bits) - 1)
-        cn = card_number   & ((1 << cn_bits) - 1)
-
-        # Split data bits (fc + cn) into halves for parity computation
-        data_bits  = fc_bits + cn_bits
-        upper_half = data_bits // 2
-        lower_half = data_bits - upper_half
-
-        if fc_bits >= upper_half:
-            upper_data = fc >> (fc_bits - upper_half)
-        else:
-            cn_upper = upper_half - fc_bits
-            upper_data = (fc << cn_upper) | (cn >> (cn_bits - cn_upper))
-
-        lower_data = cn & ((1 << lower_half) - 1)
-
-        # Even parity: total 1s (parity bit + upper_data) must be even
-        even_p = bin(upper_data).count('1') % 2
-        # Odd parity: total 1s (parity bit + lower_data) must be odd
-        odd_p  = 1 - (bin(lower_data).count('1') % 2)
-
-        packed = (even_p << (total_bits - 1)) | (fc << (cn_bits + 1)) | (cn << 1) | odd_p
-
-        num_bytes  = min(32, (total_bits + 7) // 8)
-        card_bytes = packed.to_bytes(num_bytes, byteorder='big')
-        return card_bytes.hex()
 
     def _apply_ag_action(self, ag_card_id: str, action: str):
         if action == 'suspended':

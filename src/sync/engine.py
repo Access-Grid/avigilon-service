@@ -53,6 +53,7 @@ class SyncEngine:
             local_db=local_db,
             ag_client=ag_client,
             template_id=config['accessgrid']['template_id'],
+            facility_code=config.get('plasec', {}).get('facility_code', ''),
         )
 
         self.running        = False
@@ -125,29 +126,7 @@ class SyncEngine:
             logger.warning(f"Could not fetch AG template protocol: {e}")
             logger.debug(f"template_protocol remains: {self.strategies.template_protocol!r}")
 
-        # --- Plasec card format (facility code + bit lengths for file_data) ---
-        try:
-            formats = self.plasec.get_card_formats()
-            logger.debug(f"Plasec card_formats count: {len(formats)}, data: {formats}")
-            if formats:
-                # Pick the first format with a non-empty facility code
-                fmt = next(
-                    (f for f in formats if f.get('facility_code') and f['facility_code'] != 'None'),
-                    formats[0],
-                )
-                self.strategies.default_facility_code = fmt.get('facility_code', '')
-                self.strategies.total_bits            = fmt.get('total_bits', '')
-                self.strategies.fc_bits               = fmt.get('fc_bits', '')
-                self.strategies.cn_bits               = fmt.get('cn_bits', '')
-                logger.info(
-                    f"Card format {fmt.get('name')!r}: facility_code={fmt.get('facility_code')!r}, "
-                    f"total_bits={fmt.get('total_bits')!r}, "
-                    f"fc_bits={fmt.get('fc_bits')!r}, cn_bits={fmt.get('cn_bits')!r}"
-                )
-            else:
-                logger.warning("No card formats found in Plasec")
-        except Exception as e:
-            logger.warning(f"Could not fetch Plasec card formats: {e}")
+        logger.info(f"Using facility_code from config: {self.strategies.facility_code!r}")
 
     def _sync_loop(self):
         self.running = True
