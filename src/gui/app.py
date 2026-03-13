@@ -435,9 +435,11 @@ class AccessGridAvigilonGUI:
 
     def _on_close(self):
         if self.sync_engine and self.sync_engine.running:
-            if not messagebox.askyesno(
+            if not messagebox.askokcancel(
                 "Quit",
-                "Sync is running. Stop it and exit?"
+                "IF YOU QUIT THIS APP, CREDENTIALS WILL NO LONGER "
+                "SYNCHRONIZE BETWEEN AVIGILON AND ACCESSGRID.\n\n"
+                "Click OK if you're sure this is what you want to do."
             ):
                 return
         self._stop_sync()
