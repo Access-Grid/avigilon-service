@@ -671,6 +671,10 @@ class PlaSecClient:
                 # Variant (a): tokens list
                 raw_status = str(ext.get('token_status', '') or '').lower()
                 status = self._TOKEN_STATUS_MAP.get(raw_status, '1')
+                logger.info(
+                    f"Token normalize: raw token_status={ext.get('token_status')!r} "
+                    f"→ lower={raw_status!r} → mapped={status!r}"
+                )
                 issue_date      = ext.get('formatted_issue_date', '') or ''
                 activate_date   = ext.get('formatted_activate_date', '') or ''
                 deactivate_date = ext.get('formatted_deactivate_date', '') or ''

@@ -270,6 +270,10 @@ class SyncStrategies:
 
             current   = token.get('status', '1')
             last_seen = record.get('last_synced_token_status', '1')
+            logger.info(
+                f"Phase 2 check: token {tid} — plasec_status={current!r}, "
+                f"last_seen={last_seen!r}, embossed={token.get('embossed_number', '')!r}"
+            )
             if current == last_seen:
                 continue
 
@@ -279,11 +283,12 @@ class SyncStrategies:
                 continue
 
             logger.info(
-                f"Status change: identity {iid} token {tid} "
+                f"Status change detected: identity {iid} token {tid} "
                 f"Plasec {last_seen}→{current}, AG action: {ag_action}"
             )
             try:
                 self._apply_ag_action(ag_card_id, ag_action)
+                logger.info(f"Applied AG action {ag_action!r} on card {ag_card_id}")
                 self.db.update_token_status_seen(iid, tid, current)
                 updated += 1
             except Exception as e:
