@@ -174,6 +174,7 @@ class SyncStrategies:
         full_name   = item.get('full_name', '')
         email       = item.get('identity', {}).get('email', '')
         phone       = item.get('identity', {}).get('phone', '')
+        title       = item.get('identity', {}).get('title', '')
 
         is_seos = self.template_protocol == 'seos'
 
@@ -194,6 +195,7 @@ class SyncStrategies:
                 full_name=full_name,
                 email=email,
                 phone_number=phone,
+                title=title,
                 start_date=item.get('activate_date') or None,
                 expiration_date=item.get('deactivate_date') or None,
             )
@@ -223,6 +225,7 @@ class SyncStrategies:
                 full_name=full_name,
                 email=email,
                 phone=phone,
+                title=title,
                 token_status=item.get('token', {}).get('status', '1'),
             )
             logger.info(f"Synced {full_name} → AG card {ag_card_id}")
@@ -424,10 +427,12 @@ class SyncStrategies:
                 cur_name  = identity.get('full_name', '')
                 cur_email = identity.get('email', '')
                 cur_phone = identity.get('phone', '')
+                cur_title = identity.get('title', '')
 
                 if (cur_name  == record.get('full_name', '') and
                         cur_email == record.get('last_synced_email', '') and
-                        cur_phone == record.get('last_synced_phone', '')):
+                        cur_phone == record.get('last_synced_phone', '') and
+                        cur_title == record.get('last_synced_title', '')):
                     continue
 
                 logger.info(
@@ -440,9 +445,11 @@ class SyncStrategies:
                     update_params['email'] = cur_email
                 if cur_phone != record.get('last_synced_phone', ''):
                     update_params['phone_number'] = cur_phone
+                if cur_title != record.get('last_synced_title', ''):
+                    update_params['title'] = cur_title
 
                 self.ag.access_cards.update(card_id=ag_card_id, **update_params)
-                self.db.update_field_snapshot(iid, tid, cur_name, cur_email, cur_phone)
+                self.db.update_field_snapshot(iid, tid, cur_name, cur_email, cur_phone, cur_title)
                 changed += 1
 
             except Exception as e:

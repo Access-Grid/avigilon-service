@@ -9,7 +9,7 @@ Schema (ag_sync_state):
   (plasec_identity_id, plasec_token_id)  — composite PK
   accessgrid_card_id                      — AG card ID after provisioning
   card_number                             — plasecInternalnumber (used as card #)
-  full_name, last_synced_email, last_synced_phone
+  full_name, last_synced_email, last_synced_phone, last_synced_title
   last_synced_token_status               — last Plasec token status seen (for change detection)
   created_at, last_synced_at
   status                                  — 'active' | 'suspended' | 'deleted' | 'error'
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS ag_sync_state (
     full_name               TEXT,
     last_synced_email       TEXT,
     last_synced_phone       TEXT,
+    last_synced_title       TEXT,
     last_synced_photo_hash  TEXT,
     last_synced_token_status TEXT,
     created_at              TEXT,
@@ -70,6 +71,14 @@ class LocalDB:
         try:
             self._conn.execute(_CREATE_TABLE)
             self._conn.commit()
+            # Migrate: add last_synced_title if missing (added after initial release)
+            try:
+                self._conn.execute(
+                    "ALTER TABLE ag_sync_state ADD COLUMN last_synced_title TEXT"
+                )
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
             logger.debug("ag_sync_state table ready")
             return True
         except Exception as e:
@@ -151,6 +160,7 @@ class LocalDB:
         full_name: str,
         email: str = '',
         phone: str = '',
+        title: str = '',
         token_status: str = '1',
         photo_hash: str = '',
     ) -> bool:
@@ -165,15 +175,16 @@ class LocalDB:
                 INSERT INTO ag_sync_state
                     (plasec_identity_id, plasec_token_id, accessgrid_card_id,
                      card_number, full_name, last_synced_email, last_synced_phone,
-                     last_synced_photo_hash, last_synced_token_status,
+                     last_synced_title, last_synced_photo_hash, last_synced_token_status,
                      created_at, last_synced_at, status, retry_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)
                 ON CONFLICT(plasec_identity_id, plasec_token_id) DO UPDATE SET
                     accessgrid_card_id      = excluded.accessgrid_card_id,
                     card_number             = excluded.card_number,
                     full_name               = excluded.full_name,
                     last_synced_email       = excluded.last_synced_email,
                     last_synced_phone       = excluded.last_synced_phone,
+                    last_synced_title       = excluded.last_synced_title,
                     last_synced_photo_hash  = excluded.last_synced_photo_hash,
                     last_synced_token_status = excluded.last_synced_token_status,
                     last_synced_at          = excluded.last_synced_at,
@@ -182,7 +193,7 @@ class LocalDB:
                     sync_error              = NULL
                 """,
                 (identity_id, token_id, ag_card_id, card_number, full_name,
-                 email, phone, photo_hash, token_status, now, now)
+                 email, phone, title, photo_hash, token_status, now, now)
             )
             self._conn.commit()
             logger.debug(f"Recorded sync: identity={identity_id} token={token_id} ag={ag_card_id}")
@@ -229,15 +240,16 @@ class LocalDB:
         full_name: str,
         email: str,
         phone: str,
+        title: str = '',
     ) -> bool:
         """Update the last-seen values of fields used for change detection."""
         try:
             self._conn.execute(
                 "UPDATE ag_sync_state "
                 "SET full_name = ?, last_synced_email = ?, last_synced_phone = ?, "
-                "    last_synced_at = ? "
+                "    last_synced_title = ?, last_synced_at = ? "
                 "WHERE plasec_identity_id = ? AND plasec_token_id = ?",
-                (full_name, email, phone, _now(), identity_id, token_id)
+                (full_name, email, phone, title, _now(), identity_id, token_id)
             )
             self._conn.commit()
             return True
