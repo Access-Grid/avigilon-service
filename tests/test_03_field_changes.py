@@ -101,6 +101,56 @@ class Test03FieldChanges(BaseSyncTest):
 
         print("  AG update called with new name")
 
+    def test_04_title_change_updates_ag_card(self):
+        print(f"\n[03] Title change in Plasec → AG card updated with new title")
+
+        changed_detail = copy.deepcopy(IDENTITY_DETAIL_PERSON)
+        changed_detail['data']['plasecidentityTitle'] = 'Senior Engineer'
+        self._configure(changed_detail)
+
+        metrics = self.strategies.run_cycle()
+
+        self.assertEqual(metrics['field_changes'], 1)
+        self.ag_client.access_cards.update.assert_called_once_with(
+            card_id=AG_CARD_ID, title='Senior Engineer'
+        )
+
+        print("  AG update called with new title")
+
+    def test_05_title_change_reflected_in_db(self):
+        print(f"\n[03] DB should store new title after field sync")
+
+        changed_detail = copy.deepcopy(IDENTITY_DETAIL_PERSON)
+        changed_detail['data']['plasecidentityTitle'] = 'Manager'
+        self._configure(changed_detail)
+
+        self.strategies.run_cycle()
+
+        record = self.get_db_record()
+        self.assertEqual(record['last_synced_title'], 'Manager',
+                         "DB should reflect updated title")
+
+        print(f"  DB last_synced_title={record['last_synced_title']}")
+
+    def test_06_title_included_in_provision(self):
+        print(f"\n[03] Title should be included in initial provision call")
+
+        # Remove existing synced record so provisioning happens
+        self.local_db._conn.execute("DELETE FROM ag_sync_state")
+        self.local_db._conn.commit()
+
+        detail_with_title = copy.deepcopy(IDENTITY_DETAIL_PERSON)
+        detail_with_title['data']['plasecidentityTitle'] = 'Director'
+        self._configure(detail_with_title)
+
+        metrics = self.strategies.run_cycle()
+
+        self.assertEqual(metrics['new'], 1)
+        provision_kwargs = self.ag_client.access_cards.provision.call_args.kwargs
+        self.assertEqual(provision_kwargs['title'], 'Director')
+
+        print(f"  Provision called with title={provision_kwargs['title']!r}")
+
 
 if __name__ == '__main__':
     unittest.main()
